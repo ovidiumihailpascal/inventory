@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: inventory_postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-inventory}
+      POSTGRES_USER: ${DB_USER:-inventory_app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: "-c max_connections=200"
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - inventory_postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-inventory_app} -d ${DB_NAME:-inventory}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - inventory_network
+    restart: unless-stopped
+
+  inventory-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: inventory_app
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-inventory}
+      - DB_USER=${DB_USER:-inventory_app}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - FLASK_SECRET=${FLASK_SECRET:-change-this-secret-in-production}
+      - INVENTORY_USER=${INVENTORY_USER:-admin}
+      - INVENTORY_PASS=${INVENTORY_PASS:-admin}
+    ports:
+      - "${APP_PORT:-5000}:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+    networks:
+      - inventory_network
+    restart: unless-stopped
+    command: gunicorn --bind 0.0.0.0:5000 --workers 4 --timeout 120 app:app
+
+volumes:
+  inventory_postgres_data:
+    driver: local
+
+networks:
+  inventory_network:
+    driver: bridge

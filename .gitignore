@@ -1,0 +1,85 @@
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+
+# Database files
+instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# PostgreSQL data
+postgres_data/
+backups/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# IDE and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+.docker/
+
+# Application
+app_output.log
+app.py.backup
+database.py.backup
+
+# Uploads (if any)
+uploads/
+/static/uploads/
+
+# IDE
+.venv
+.env.local
+*.pem
+*.key

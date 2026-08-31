@@ -1,0 +1,111 @@
+{% extends 'layout.html' %}
+
+{% block content %}
+  <div class="container mt-5">
+    <div class="row mb-4">
+      <div class="col-12">
+        <h1 class="mb-2">Welcome, {{ user }}!</h1>
+        <p class="text-muted">Manage your inventory efficiently</p>
+      </div>
+    </div>
+
+    <div class="row">
+      <!-- Inventory Tile -->
+      <div class="col-12 col-md-4 mb-4">
+        <div class="card h-100 shadow-sm" style="cursor: pointer; transition: transform 0.2s;" 
+             onmouseover="this.style.transform='translateY(-5px)'" 
+             onmouseout="this.style.transform='translateY(0)'"
+             onclick="window.location.href='/inventory'">
+          <div class="card-body text-center py-5">
+            <div class="mb-3">
+              <i class="bi bi-box-seam" style="font-size: 3rem; color: #0d6efd;"></i>
+            </div>
+            <h3 class="card-title">Inventory</h3>
+            <p class="card-text text-muted">Manage your inventory items</p>
+            <button class="btn btn-primary mt-3">Go to Inventory</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Create Product Lists Tile -->
+      <div class="col-12 col-md-4 mb-4">
+        <div class="card h-100 shadow-sm" style="cursor: pointer; transition: transform 0.2s;" 
+             onmouseover="this.style.transform='translateY(-5px)'" 
+             onmouseout="this.style.transform='translateY(0)'"
+             onclick="window.location.href='/lists'">
+          <div class="card-body text-center py-5">
+            <div class="mb-3">
+              <i class="bi bi-list-check" style="font-size: 3rem; color: #198754;"></i>
+            </div>
+            <h3 class="card-title">Product Lists</h3>
+            <p class="card-text text-muted">Create and manage product lists</p>
+            <button class="btn btn-success mt-3">Go to Lists</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Shops Tile -->
+      <div class="col-12 col-md-4 mb-4">
+        <div class="card h-100 shadow-sm" style="cursor: pointer; transition: transform 0.2s;" 
+             onmouseover="this.style.transform='translateY(-5px)'" 
+             onmouseout="this.style.transform='translateY(0)'"
+             onclick="window.location.href='/shops'">
+          <div class="card-body text-center py-5">
+            <div class="mb-3">
+              <i class="bi bi-shop" style="font-size: 3rem; color: #fd7e14;"></i>
+            </div>
+            <h3 class="card-title">Shops</h3>
+            <p class="card-text text-muted">Create and manage selling locations</p>
+            <button class="btn btn-warning mt-3">Go to Shops</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- User Management Tile (Admin Only) -->
+      {% if user_role == 'admin' %}
+      <div class="col-12 col-md-4 mb-4">
+        <div class="card h-100 shadow-sm" style="cursor: pointer; transition: transform 0.2s;" 
+             onmouseover="this.style.transform='translateY(-5px)'" 
+             onmouseout="this.style.transform='translateY(0)'"
+             onclick="window.location.href='/users'">
+          <div class="card-body text-center py-5">
+            <div class="mb-3">
+              <i class="bi bi-people" style="font-size: 3rem; color: #6f42c1;"></i>
+            </div>
+            <h3 class="card-title">User Management</h3>
+            <p class="card-text text-muted">Create and manage users, control access</p>
+            <button class="btn btn-primary mt-3">Manage Users</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Backup & Restore Tile (Admin Only) -->
+      <div class="col-12 col-md-4 mb-4">
+        <div class="card h-100 shadow-sm" style="cursor: pointer; transition: transform 0.2s;" 
+             onmouseover="this.style.transform='translateY(-5px)'" 
+             onmouseout="this.style.transform='translateY(0)'"
+             onclick="window.location.href='/backup-restore'">
+          <div class="card-body text-center py-5">
+            <div class="mb-3">
+              <i class="bi bi-cloud-download" style="font-size: 3rem; color: #dc3545;"></i>
+            </div>
+            <h3 class="card-title">Backup & Restore</h3>
+            <p class="card-text text-muted">Create and restore database backups</p>
+            <button class="btn btn-danger mt-3">Backup & Restore</button>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <style>
+    .card {
+      border: 1px solid #dee2e6;
+      border-radius: 10px;
+    }
+    .card:hover {
+      box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15) !important;
+    }
+  </style>
+{% endblock %}

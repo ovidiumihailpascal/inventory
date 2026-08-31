@@ -1,0 +1,297 @@
+{% extends 'layout.html' %}
+
+{% block content %}
+  <div class="card">
+    <div class="card-body">
+      <h5 class="card-title">Welcome, {{ user }}</h5>
+      <p class="text-muted">Manage your product catalog below.</p>
+      
+      <!-- Add Product Section -->
+      <div class="card mb-4 border-primary">
+        <div class="card-header bg-primary text-white">
+          <h6 class="mb-0">Add New Product</h6>
+        </div>
+        <div class="card-body">
+          <form id="addProductForm" class="row g-2">
+            <div class="col-12 col-md-3">
+              <input id="productName" class="form-control" placeholder="Product Name" required>
+            </div>
+            <div class="col-12 col-md-2">
+              <input id="productCutType" class="form-control" placeholder="Cut Type (e.g., Ribeye)">
+            </div>
+            <div class="col-12 col-md-3">
+              <input id="productPrice" type="number" step="0.01" min="0" class="form-control" placeholder="Price (RON)" required>
+            </div>
+            <div class="col-12 col-md-4 d-grid">
+              <button class="btn btn-success" type="submit">Add Product</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <hr>
+
+      <!-- Search Section (Outside the form) -->
+      <div class="mb-3">
+        <input id="searchProductsInput" class="form-control form-control-lg" placeholder="🔍 Search products...">
+      </div>
+
+      <!-- Products Table -->
+      <div class="table-responsive">
+        <table class="table table-striped table-hover">
+          <thead class="table-light">
+            <tr>
+              <th>Product Name</th>
+              <th>Cut Type</th>
+              <th>Price (RON)</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="productsTableBody">
+            <tr><td colspan="4" class="text-center text-muted">Loading products...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Product Modal -->
+  <div class="modal fade" id="editProductModal" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Edit Product</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label for="editProductName" class="form-label">Product Name</label>
+            <input type="text" class="form-control" id="editProductName" required>
+          </div>
+          <div class="mb-3">
+            <label for="editProductCutType" class="form-label">Cut Type</label>
+            <input type="text" class="form-control" id="editProductCutType" placeholder="e.g., Ribeye">
+          </div>
+          <div class="mb-3">
+            <label for="editProductPrice" class="form-label">Price (RON)</label>
+            <input type="number" step="0.01" min="0" class="form-control" id="editProductPrice" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" id="saveProductBtn">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let editProductModal = null;
+    let currentEditProductId = null;
+    let allProducts = [];
+
+    function initializeModal() {
+      if (!editProductModal && window.bootstrap) {
+        editProductModal = new bootstrap.Modal(document.getElementById('editProductModal'));
+      }
+    }
+
+    function escapeHtml(unsafe) {
+      return unsafe
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    async function fetchProducts() {
+      try {
+        const res = await fetch('/api/lists');
+        const lists = await res.json();
+        
+        allProducts = [];
+        for (const list of lists) {
+          const listRes = await fetch(`/api/lists/${list.id}`);
+          const listData = await listRes.json();
+          if (listData.items) {
+            allProducts = allProducts.concat(listData.items.map(item => ({
+              ...item,
+              listId: list.id,
+              listName: list.name
+            })));
+          }
+        }
+        
+        renderProducts(allProducts);
+      } catch (err) {
+        console.error('Error fetching products:', err);
+      }
+    }
+
+    function renderProducts(productsToShow) {
+      const tbody = document.getElementById('productsTableBody');
+      
+      if (productsToShow.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No products yet. Add one to get started!</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = productsToShow.map(product => `
+        <tr>
+          <td><strong>${escapeHtml(product.item_name)}</strong></td>
+          <td>${product.cut_type ? escapeHtml(product.cut_type) : '—'}</td>
+          <td>${product.price ? parseFloat(product.price).toFixed(2) + ' RON' : '—'}</td>
+          <td>
+            <button class="btn btn-sm btn-warning edit-product-btn" data-id="${product.id}" data-list-id="${product.listId}" data-name="${escapeHtml(product.item_name)}" data-cut="${escapeHtml(product.cut_type || '')}" data-price="${product.price || ''}">Edit</button>
+            <button class="btn btn-sm btn-danger delete-product-btn" data-id="${product.id}" data-list-id="${product.listId}">Delete</button>
+          </td>
+        </tr>
+      `).join('');
+
+      attachProductHandlers();
+    }
+
+    function filterProducts() {
+      const searchTerm = document.getElementById('searchProductsInput').value.toLowerCase();
+      const filtered = allProducts.filter(p => 
+        p.item_name.toLowerCase().includes(searchTerm) ||
+        (p.cut_type && p.cut_type.toLowerCase().includes(searchTerm))
+      );
+      renderProducts(filtered);
+    }
+
+    function attachProductHandlers() {
+      // Edit product
+      document.querySelectorAll('.edit-product-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          currentEditProductId = e.currentTarget.dataset.id;
+          const listId = e.currentTarget.dataset.listId;
+          document.getElementById('editProductName').value = e.currentTarget.dataset.name;
+          document.getElementById('editProductCutType').value = e.currentTarget.dataset.cut;
+          document.getElementById('editProductPrice').value = e.currentTarget.dataset.price;
+          document.getElementById('editProductName').dataset.listId = listId;
+          initializeModal();
+          if (editProductModal) editProductModal.show();
+        });
+      });
+
+      // Delete product
+      document.querySelectorAll('.delete-product-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const productId = e.currentTarget.dataset.id;
+          const listId = e.currentTarget.dataset.listId;
+          if (!confirm('Delete this product?')) return;
+          await fetch(`/api/lists/${listId}/items/${productId}`, { method: 'DELETE' });
+          fetchProducts();
+        });
+      });
+    }
+
+    // Add product form
+    document.getElementById('addProductForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const name = document.getElementById('productName').value.trim();
+      const cutType = document.getElementById('productCutType').value.trim();
+      const price = parseFloat(document.getElementById('productPrice').value);
+
+      if (!name || isNaN(price)) {
+        alert('Please fill in all required fields');
+        return;
+      }
+
+      // Check for duplicates
+      const duplicate = allProducts.some(p => 
+        p.item_name.toLowerCase() === name.toLowerCase() && 
+        (p.cut_type || '').toLowerCase() === cutType.toLowerCase()
+      );
+
+      if (duplicate) {
+        alert('This product (with this cut type) already exists!');
+        return;
+      }
+
+      // For now, create a default list if it doesn't exist, or add to first available list
+      let listId = null;
+      
+      // Try to find or create a "Master Products" list
+      const listsRes = await fetch('/api/lists');
+      const lists = await listsRes.json();
+      
+      if (lists.length === 0) {
+        // Create a default list
+        const createRes = await fetch('/api/lists', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'Master Products', description: 'Default product catalog' })
+        });
+        const newList = await createRes.json();
+        listId = newList.id;
+      } else {
+        // Use the first list
+        listId = lists[0].id;
+      }
+
+      // Add item to the list
+      const res = await fetch(`/api/lists/${listId}/items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          item_name: name, 
+          cut_type: cutType || null, 
+          price: price,
+          qty: 1
+        })
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        alert(error.error || 'Failed to add product');
+        return;
+      }
+
+      document.getElementById('productName').value = '';
+      document.getElementById('productCutType').value = '';
+      document.getElementById('productPrice').value = '';
+      document.getElementById('searchProductsInput').value = '';
+      
+      fetchProducts();
+    });
+
+    // Save edited product
+    document.getElementById('saveProductBtn').addEventListener('click', async () => {
+      const name = document.getElementById('editProductName').value.trim();
+      const cutType = document.getElementById('editProductCutType').value.trim();
+      const price = parseFloat(document.getElementById('editProductPrice').value);
+      const listId = document.getElementById('editProductName').dataset.listId;
+
+      if (!name || isNaN(price)) {
+        alert('Please fill in all required fields');
+        return;
+      }
+
+      const res = await fetch(`/api/lists/${listId}/items/${currentEditProductId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          item_name: name, 
+          cut_type: cutType || null, 
+          price: price
+        })
+      });
+
+      if (res.ok) {
+        if (editProductModal) editProductModal.hide();
+        fetchProducts();
+      }
+    });
+
+    // Search functionality
+    document.getElementById('searchProductsInput').addEventListener('input', filterProducts);
+
+    // Initialize
+    initializeModal();
+    fetchProducts();
+  </script>
+{% endblock %}

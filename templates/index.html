@@ -1,0 +1,528 @@
+{% extends 'layout.html' %}
+
+{% block content %}
+  <div class="card">
+    <div class="card-body">
+      <h5 class="card-title">Welcome, {{ user }}</h5>
+      <p class="text-muted">Manage your inventory items below.</p>
+      <form id="addForm" class="row g-2">
+        <div class="col-5 col-sm-6 position-relative">
+          <input id="name" class="form-control" placeholder="Search product..." required autocomplete="off">
+          <div id="suggestionsBox" class="position-absolute w-100" style="top: 100%; left: 0; background: white; border: 1px solid #ddd; border-top: none; max-height: 200px; overflow-y: auto; display: none; z-index: 1000;">
+          </div>
+        </div>
+        <div class="col-2 col-sm-2">
+          <select id="shopSelect" class="form-control" required>
+            <option value="">Select Shop...</option>
+          </select>
+        </div>
+        <div class="col-2 col-sm-2">
+          <input id="qty" type="number" min="0" class="form-control" placeholder="Qty" value="1" required>
+        </div>
+        <div class="col-2 col-sm-2">
+          <input id="cutType" class="form-control" placeholder="Cut type" autocomplete="off">
+        </div>
+        <div class="col-1 col-sm-1 d-grid">
+          <button class="btn btn-success btn-sm" type="submit">Add</button>
+        </div>
+      </form>
+      <hr>
+      <div class="row g-2 mb-3">
+        <div class="col-12 col-md-8">
+          <input type="text" id="searchInput" class="form-control" placeholder="🔍 Search items..." autocomplete="off">
+        </div>
+        <div class="col-12 col-md-4">
+          <select id="shopFilter" class="form-control">
+            <option value="">Show All Shops</option>
+          </select>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-striped" id="itemsTable">
+          <thead>
+            <tr>
+              <th>Product Name</th>
+              <th class="text-end">Total Qty</th>
+              <th>Price (RON)</th>
+              <th>Shop Locations</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Quantity Modal -->
+  <div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Edit Quantity</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label for="editQtyInput" class="form-label">New Quantity</label>
+            <input type="number" min="0" class="form-control" id="editQtyInput" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" id="saveQtyBtn">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Transfer Quantity Modal -->
+  <div class="modal fade" id="transferModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Transfer Inventory</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Product: <strong id="transferProductName"></strong></label>
+          </div>
+          <div class="mb-3">
+            <label for="transferFromShop" class="form-label">From Shop</label>
+            <select id="transferFromShop" class="form-control" required>
+              <option value="">Select shop...</option>
+            </select>
+            <small class="text-muted" id="transferFromQty">Available: 0</small>
+          </div>
+          <div class="mb-3">
+            <label for="transferToShop" class="form-label">To Shop</label>
+            <select id="transferToShop" class="form-control" required>
+              <option value="">Select shop...</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label for="transferQty" class="form-label">Quantity to Transfer</label>
+            <input type="number" min="1" class="form-control" id="transferQty" value="1" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" id="executeTransferBtn">Transfer</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentEditId = null;
+    let editModal = null;
+    let transferModal = null;
+    let allItems = [];
+    let allProducts = [];
+    let allShops = [];
+
+    function initializeModal() {
+      if (!editModal && window.bootstrap) {
+        editModal = new bootstrap.Modal(document.getElementById('editModal'));
+      }
+    }
+
+    function initializeTransferModal() {
+      if (!transferModal && window.bootstrap) {
+        transferModal = new bootstrap.Modal(document.getElementById('transferModal'));
+      }
+    }
+
+    // Fetch shops and populate dropdown
+    async function fetchShops() {
+      try {
+        const res = await fetch('/api/shops');
+        allShops = await res.json();
+        const select = document.getElementById('shopSelect');
+        select.innerHTML = '<option value="">Select Shop...</option>';
+        
+        // Also populate the shop filter dropdown
+        const filterSelect = document.getElementById('shopFilter');
+        filterSelect.innerHTML = '<option value="">Show All Shops</option>';
+        
+        allShops.forEach(shop => {
+          const option = document.createElement('option');
+          option.value = shop.id;
+          option.textContent = shop.name;
+          select.appendChild(option);
+          
+          const filterOption = option.cloneNode(true);
+          filterSelect.appendChild(filterOption);
+        });
+      } catch (err) {
+        console.error('Error fetching shops:', err);
+      }
+    }
+
+    // Fetch all product names from product lists for autocomplete
+    async function fetchProducts() {
+      try {
+        const res = await fetch('/api/lists');
+        const lists = await res.json();
+        allProducts = [];
+        for (const list of lists) {
+          const listRes = await fetch(`/api/lists/${list.id}`);
+          const listData = await listRes.json();
+          if (listData.items) {
+            for (const item of listData.items) {
+              allProducts.push(item.item_name);
+            }
+          }
+        }
+        allProducts = [...new Set(allProducts)].sort();
+      } catch (err) {
+        console.error('Error fetching products:', err);
+      }
+    }
+
+    function showSuggestions(searchTerm) {
+      const suggestionsBox = document.getElementById('suggestionsBox');
+      if (!searchTerm.trim()) {
+        suggestionsBox.style.display = 'none';
+        return;
+      }
+
+      const lowerTerm = searchTerm.toLowerCase();
+      const filtered = allProducts.filter(p => p.toLowerCase().includes(lowerTerm));
+
+      if (filtered.length === 0) {
+        suggestionsBox.style.display = 'none';
+        return;
+      }
+
+      suggestionsBox.innerHTML = '';
+      filtered.slice(0, 10).forEach(product => {
+        const div = document.createElement('div');
+        div.className = 'p-2 cursor-pointer';
+        div.style.cursor = 'pointer';
+        div.textContent = product;
+        div.addEventListener('mouseover', () => div.style.backgroundColor = '#f0f0f0');
+        div.addEventListener('mouseout', () => div.style.backgroundColor = '');
+        div.addEventListener('click', () => {
+          document.getElementById('name').value = product;
+          suggestionsBox.style.display = 'none';
+        });
+        suggestionsBox.appendChild(div);
+      });
+
+      suggestionsBox.style.display = 'block';
+    }
+
+    function filterTable(searchTerm) {
+      const rows = document.querySelectorAll('#itemsTable tbody tr');
+      const lowerSearchTerm = searchTerm.toLowerCase();
+      const selectedShop = document.getElementById('shopFilter').value;
+      
+      rows.forEach(row => {
+        const itemName = row.querySelector('td:first-child').textContent.toLowerCase();
+        const shopId = row.dataset.shopId || '';
+        
+        // Check if row matches search term
+        const matchesSearch = itemName.includes(lowerSearchTerm);
+        
+        // Check if row matches shop filter (empty = show all)
+        const matchesShop = !selectedShop || shopId === selectedShop || shopId === '';
+        
+        row.style.display = (matchesSearch && matchesShop) ? '' : 'none';
+      });
+    }
+
+    // Get shop name by ID
+    function getShopName(shopId) {
+      const shop = allShops.find(s => s.id === shopId);
+      return shop ? shop.name : 'Unknown Shop';
+    }
+
+    async function fetchItems(){
+      const res = await fetch('/api/items');
+      allItems = await res.json();
+      
+      // Group items by product name
+      const groupedByProduct = {};
+      allItems.forEach(item => {
+        if (!groupedByProduct[item.name]) {
+          groupedByProduct[item.name] = [];
+        }
+        groupedByProduct[item.name].push(item);
+      });
+
+      const tbody = document.querySelector('#itemsTable tbody');
+      tbody.innerHTML = '';
+
+      // Create rows for each product
+      Object.keys(groupedByProduct).sort().forEach(productName => {
+        const items = groupedByProduct[productName];
+        const totalQty = items.reduce((sum, item) => sum + item.qty, 0);
+        const price = items[0].price;  // Price should be the same for all items with same name
+        const priceDisplay = price !== null && price !== undefined ? `${price} RON` : '—';
+        
+        // Create shop locations text with cut types
+        const shopLocations = items.map(item => {
+          const shopName = getShopName(item.shop_id);
+          const cutType = item.cut_type ? ` (${item.cut_type})` : '';
+          return `${shopName}: ${item.qty}${cutType}`;
+        }).join(' | ');
+
+        const tr = document.createElement('tr');
+        tr.dataset.shopId = '';  // Parent rows show all shops
+        tr.innerHTML = `
+          <td><strong>${escapeHtml(productName)}</strong></td>
+          <td class="text-end"><strong>${totalQty}</strong></td>
+          <td>${priceDisplay}</td>
+          <td>${shopLocations}</td>
+          <td class="text-end">
+            <button class="btn btn-sm btn-info me-1 transfer-btn" data-product="${escapeHtml(productName)}">Transfer</button>
+            <button class="btn btn-sm btn-danger delete-all-btn" data-product="${escapeHtml(productName)}">Delete All</button>
+          </td>`;
+        tbody.appendChild(tr);
+
+        // Add individual shop rows
+        items.forEach(item => {
+          const shopRow = document.createElement('tr');
+          shopRow.dataset.shopId = item.shop_id;  // Store shop ID for filtering
+          shopRow.style.backgroundColor = '#f9f9f9';
+          const cutType = item.cut_type ? ` <small class="text-muted">(${escapeHtml(item.cut_type)})</small>` : '';
+          shopRow.innerHTML = `
+            <td style="padding-left: 40px; font-size: 0.9em;">→ ${getShopName(item.shop_id)}${cutType}</td>
+            <td class="text-end">${item.qty}</td>
+            <td></td>
+            <td></td>
+            <td class="text-end">
+              <button class="btn btn-sm btn-primary me-1 edit-btn" data-id="${item.id}" data-qty="${item.qty}" data-shop="${item.shop_id}">Edit</button>
+              <button class="btn btn-sm btn-danger delete-btn" data-id="${item.id}">Delete</button>
+            </td>`;
+          tbody.appendChild(shopRow);
+        });
+      });
+
+      // Attach delete all handlers
+      document.querySelectorAll('.delete-all-btn').forEach(b=>b.addEventListener('click', async e=>{
+        const product = e.currentTarget.dataset.product;
+        if(!confirm(`Delete all instances of "${product}" from all shops?`)) return;
+        const itemsToDelete = allItems.filter(item => item.name === product);
+        for (const item of itemsToDelete) {
+          await fetch('/api/items/'+item.id, {method:'DELETE'});
+        }
+        fetchItems();
+      }));
+
+      // Attach transfer handlers
+      document.querySelectorAll('.transfer-btn').forEach(b=>b.addEventListener('click', async e=>{
+        const productName = e.currentTarget.dataset.product;
+        const productItems = allItems.filter(item => item.name === productName);
+        
+        if (productItems.length < 1) {
+         alert('Product not found in inventory');
+         return;
+        }
+
+        // Populate transfer modal
+        document.getElementById('transferProductName').textContent = productName;
+        const fromSelect = document.getElementById('transferFromShop');
+        const toSelect = document.getElementById('transferToShop');
+        
+        fromSelect.innerHTML = '<option value="">Select shop...</option>';
+        toSelect.innerHTML = '<option value="">Select shop...</option>';
+        
+        // Populate From Shop with shops that have this product
+        productItems.forEach(item => {
+         const shopName = getShopName(item.shop_id);
+         const option1 = document.createElement('option');
+         option1.value = item.id + '|' + item.shop_id + '|' + item.qty;
+         option1.textContent = `${shopName} (${item.qty})`;
+         fromSelect.appendChild(option1);
+        });
+
+        // Populate To Shop with ALL shops
+        allShops.forEach(shop => {
+         const option2 = document.createElement('option');
+         option2.value = shop.id;
+         option2.textContent = shop.name;
+         toSelect.appendChild(option2);
+        });
+
+        // Store product name for transfer
+        document.getElementById('transferQty').dataset.productName = productName;
+        document.getElementById('transferQty').value = '1';
+
+        // Show transfer modal
+        initializeTransferModal();
+        if(transferModal) transferModal.show();
+      }));
+
+      // Attach delete handlers
+      document.querySelectorAll('.delete-btn').forEach(b=>b.addEventListener('click', async e=>{
+        const id = e.currentTarget.dataset.id;
+        if(!confirm('Delete this item from this shop?')) return;
+        await fetch('/api/items/'+id, {method:'DELETE'});
+        fetchItems();
+      }));
+
+      // Attach edit handlers with modal
+      document.querySelectorAll('.edit-btn').forEach(b=>b.addEventListener('click', async e=>{
+        currentEditId = e.currentTarget.dataset.id;
+        const current = e.currentTarget.dataset.qty;
+        document.getElementById('editQtyInput').value = current;
+        initializeModal();
+        if(editModal) editModal.show();
+      }));
+
+      document.getElementById('searchInput').value = '';
+    }
+
+    function escapeHtml(unsafe) {
+      return unsafe
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    document.getElementById('saveQtyBtn').addEventListener('click', async e=>{
+      const newQty = parseInt(document.getElementById('editQtyInput').value, 10);
+      if(Number.isNaN(newQty) || newQty < 0){
+        alert('Invalid quantity');
+        return;
+      }
+      try{
+        const resp = await fetch('/api/items/'+currentEditId, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({qty:newQty})});
+        if(!resp.ok){
+          let err = null;
+          try{ err = await resp.json(); }catch(_){ err = {error: resp.status}; }
+          alert('Update failed: '+(err.error||resp.status));
+          return;
+        }
+        await fetchItems();
+        if(editModal) editModal.hide();
+      }catch(err){
+        console.error('Network error updating item', err);
+        alert('Network error: '+err.message);
+      }
+    });
+
+    document.getElementById('executeTransferBtn').addEventListener('click', async e=>{
+      const fromValue = document.getElementById('transferFromShop').value;
+      const toShopId = parseInt(document.getElementById('transferToShop').value, 10);
+      const transferQty = parseInt(document.getElementById('transferQty').value, 10);
+      const productName = document.getElementById('transferQty').dataset.productName;
+
+      if (!fromValue || !toShopId || transferQty <= 0) {
+        alert('Please fill in all fields correctly');
+        return;
+      }
+
+      const [fromItemId, fromShopId, availableQty] = fromValue.split('|').map(x => parseInt(x, 10));
+
+      if (transferQty > availableQty) {
+        alert(`Cannot transfer ${transferQty}. Only ${availableQty} available.`);
+        return;
+      }
+
+      if (fromShopId === toShopId) {
+        alert('Cannot transfer to the same shop');
+        return;
+      }
+
+      try {
+        const resp = await fetch('/api/transfer', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            product_name: productName,
+            from_shop_id: fromShopId,
+            to_shop_id: toShopId,
+            quantity: transferQty
+          })
+        });
+
+        if (!resp.ok) {
+          let err = null;
+          try{ err = await resp.json(); }catch(_){ err = {error: resp.status}; }
+          alert('Transfer failed: '+(err.error||resp.status));
+          return;
+        }
+
+        await fetchItems();
+        if(transferModal) transferModal.hide();
+      } catch (err) {
+        console.error('Network error during transfer', err);
+        alert('Network error: '+err.message);
+      }
+    });
+
+    document.getElementById('addForm').addEventListener('submit', async e=>{
+      e.preventDefault();
+      const name = document.getElementById('name').value.trim();
+      const shopId = parseInt(document.getElementById('shopSelect').value, 10);
+      const qty = parseInt(document.getElementById('qty').value,10)||0;
+      const cutType = document.getElementById('cutType').value.trim();
+      
+      if(!name || !shopId || qty <= 0) {
+        alert('Please fill in all fields with valid values');
+        return;
+      }
+      
+      // Check if product exists in the product list
+      const productExists = allProducts.some(p => p.toLowerCase() === name.toLowerCase());
+      if (!productExists) {
+        alert(`"${name}" is not in the product list. Please select a product from the suggestions.`);
+        return;
+      }
+      
+      await fetch('/api/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name, shop_id: shopId, qty, cut_type: cutType})});
+      document.getElementById('name').value = '';
+      document.getElementById('shopSelect').value = '';
+      document.getElementById('qty').value = 1;
+      document.getElementById('cutType').value = '';
+      document.getElementById('suggestionsBox').style.display = 'none';
+      fetchItems();
+    });
+
+    // Handle transfer from shop selection
+    document.addEventListener('change', (e) => {
+      if (e.target.id === 'transferFromShop') {
+        const fromValue = e.target.value;
+        if (fromValue) {
+          const [fromItemId, fromShopId, availableQty] = fromValue.split('|').map(x => parseInt(x, 10));
+          document.getElementById('transferFromQty').textContent = `Available: ${availableQty}`;
+          document.getElementById('transferQty').max = availableQty;
+        }
+      }
+    });
+
+    // Add autocomplete event listener
+    document.getElementById('name').addEventListener('input', (e) => {
+      showSuggestions(e.target.value);
+    });
+
+    // Hide suggestions when clicking outside
+    document.addEventListener('click', (e) => {
+      if (e.target.id !== 'name') {
+        document.getElementById('suggestionsBox').style.display = 'none';
+      }
+    });
+
+    // Add search event listener for inventory table filter
+    document.getElementById('searchInput').addEventListener('input', (e) => {
+      filterTable(e.target.value);
+    });
+
+    // Add shop filter event listener
+    document.getElementById('shopFilter').addEventListener('change', (e) => {
+      filterTable(document.getElementById('searchInput').value);
+    });
+
+    // Initialize
+    fetchShops();
+    fetchProducts();
+    fetchItems();
+  </script>
+
+{% endblock %}

@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backup & Restore - Inventory</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+        .backup-container {
+            max-width: 900px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        
+        .section {
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .section h2 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 2px solid #0066cc;
+            padding-bottom: 10px;
+        }
+        
+        .warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            color: #856404;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+        
+        .warning strong {
+            display: block;
+            margin-bottom: 8px;
+        }
+        
+        .info {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+        
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+            display: none;
+        }
+        
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+            display: none;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin: 15px 0;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #0066cc;
+            color: white;
+            transition: background-color 0.3s;
+        }
+        
+        button:hover {
+            background-color: #0052a3;
+        }
+        
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .button-danger {
+            background-color: #dc3545;
+        }
+        
+        .button-danger:hover {
+            background-color: #c82333;
+        }
+        
+        .file-input-group {
+            margin: 15px 0;
+        }
+        
+        .file-input-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .file-input-group input[type="file"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100%;
+            max-width: 500px;
+        }
+        
+        .backup-metadata {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 15px 0;
+            display: none;
+        }
+        
+        .backup-metadata h4 {
+            margin-top: 0;
+            color: #0066cc;
+        }
+        
+        .backup-metadata p {
+            margin: 8px 0;
+            font-family: monospace;
+            color: #555;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #0066cc;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .confirm-dialog {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            padding: 30px;
+            z-index: 1000;
+            min-width: 400px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.3);
+        }
+        
+        .confirm-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 999;
+        }
+        
+        .confirm-dialog h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        
+        .confirm-dialog p {
+            color: #666;
+            line-height: 1.6;
+        }
+        
+        .confirm-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+        
+        .button-secondary {
+            background-color: #6c757d;
+        }
+        
+        .button-secondary:hover {
+            background-color: #5a6268;
+        }
+    </style>
+</head>
+<body>
+    <div class="backup-container">
+        <h1>Backup & Restore</h1>
+        
+        <!-- Create Backup Section -->
+        <div class="section">
+            <h2>Create Backup</h2>
+            <p>Create a complete backup of all application data and download it to your computer.</p>
+            
+            <div class="info">
+                <strong>ℹ️ Information</strong>
+                Backups are downloaded to your computer and are not permanently stored on this server.
+            </div>
+            
+            <div class="button-group">
+                <button onclick="createBackup()" id="createBackupBtn">
+                    Create Backup & Download
+                </button>
+            </div>
+            
+            <div class="loading" id="createLoading">
+                <div class="spinner"></div>
+                <p>Creating backup...</p>
+            </div>
+            
+            <div class="success" id="createSuccess">
+                ✓ Backup created successfully. File saved to your downloads folder.
+            </div>
+            
+            <div class="error" id="createError"></div>
+        </div>
+        
+        <!-- Restore Backup Section -->
+        <div class="section">
+            <h2>Restore Backup</h2>
+            <p>Restore application data from a previously downloaded backup.</p>
+            
+            <div class="warning">
+                <strong>⚠️ Warning</strong>
+                Restoring this backup will replace the current application data. Make sure you have a backup of your current data before continuing.
+            </div>
+            
+            <div class="file-input-group">
+                <label for="backupFile">Select Backup File</label>
+                <input type="file" id="backupFile" accept=".zip" onchange="selectBackupFile()">
+            </div>
+            
+            <div id="backupMetadata" class="backup-metadata">
+                <h4>Backup Information</h4>
+                <p><strong>Created:</strong> <span id="metadataCreated">-</span></p>
+                <p><strong>Application Version:</strong> <span id="metadataAppVersion">-</span></p>
+                <p><strong>Database Schema:</strong> <span id="metadataSchemaVersion">-</span></p>
+                <p><strong>Backup Format:</strong> <span id="metadataFormatVersion">-</span></p>
+                <p><strong>Records:</strong></p>
+                <div id="recordCounts" style="margin-left: 20px; font-family: monospace;">
+                    <span id="recordCountsText">-</span>
+                </div>
+            </div>
+            
+            <div class="button-group">
+                <button onclick="restoreBackup()" id="restoreBtn" disabled>
+                    Restore Database
+                </button>
+                <button class="button-secondary" onclick="clearBackupFile()" id="clearBtn" disabled>
+                    Clear Selection
+                </button>
+            </div>
+            
+            <div class="loading" id="restoreLoading">
+                <div class="spinner"></div>
+                <p>Restoring database...</p>
+            </div>
+            
+            <div class="success" id="restoreSuccess">
+                ✓ Database restored successfully. The application will reload shortly.
+            </div>
+            
+            <div class="error" id="restoreError"></div>
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px;">
+            <a href="/" style="color: #0066cc; text-decoration: none;">← Back to Home</a>
+        </div>
+    </div>
+    
+    <!-- Confirmation Dialog -->
+    <div class="confirm-overlay" id="confirmOverlay"></div>
+    <div class="confirm-dialog" id="confirmDialog">
+        <h3>Confirm Restore</h3>
+        <p><strong>This action cannot be undone!</strong></p>
+        <p>You are about to restore the application database from a backup file. This will replace all current data with the data from the backup.</p>
+        <p>Make sure you have a current backup of your data before proceeding.</p>
+        <div class="confirm-buttons">
+            <button class="button-secondary" onclick="cancelRestore()">Cancel</button>
+            <button class="button-danger" onclick="confirmRestore()">Yes, Restore Database</button>
+        </div>
+    </div>
+    
+    <script>
+        let selectedBackupFile = null;
+        
+        async function createBackup() {
+            const btn = document.getElementById('createBackupBtn');
+            const loading = document.getElementById('createLoading');
+            const success = document.getElementById('createSuccess');
+            const error = document.getElementById('createError');
+            
+            // Hide all messages
+            success.style.display = 'none';
+            error.style.display = 'none';
+            
+            btn.disabled = true;
+            loading.style.display = 'block';
+            
+            try {
+                const response = await fetch('/api/backup/create', {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.error || 'Backup creation failed');
+                }
+                
+                // Download the file
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'app-backup-' + new Date().toISOString().split('T')[0] + '.zip';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                
+                success.style.display = 'block';
+            } catch (err) {
+                error.textContent = '❌ Error: ' + err.message;
+                error.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+                btn.disabled = false;
+            }
+        }
+        
+        async function selectBackupFile() {
+            const fileInput = document.getElementById('backupFile');
+            const file = fileInput.files[0];
+            
+            if (!file) return;
+            
+            selectedBackupFile = file;
+            
+            // Get backup info
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                const response = await fetch('/api/backup/info', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.error || 'Failed to read backup info');
+                }
+                
+                const info = await response.json();
+                
+                // Display metadata
+                document.getElementById('metadataCreated').textContent = info.created || '-';
+                document.getElementById('metadataAppVersion').textContent = info.application_version || '-';
+                document.getElementById('metadataSchemaVersion').textContent = info.database_schema_version || '-';
+                document.getElementById('metadataFormatVersion').textContent = info.backup_format_version || '-';
+                
+                // Display record counts
+                let recordsHtml = '';
+                if (info.record_counts) {
+                    for (const [table, count] of Object.entries(info.record_counts)) {
+                        recordsHtml += `<div>${table}: ${count} records</div>`;
+                    }
+                }
+                document.getElementById('recordCountsText').innerHTML = recordsHtml || 'No records';
+                
+                document.getElementById('backupMetadata').style.display = 'block';
+                document.getElementById('restoreBtn').disabled = false;
+                document.getElementById('clearBtn').disabled = false;
+                
+            } catch (err) {
+                const error = document.getElementById('restoreError');
+                error.textContent = '❌ Error: ' + err.message;
+                error.style.display = 'block';
+                clearBackupFile();
+            }
+        }
+        
+        function clearBackupFile() {
+            document.getElementById('backupFile').value = '';
+            selectedBackupFile = null;
+            document.getElementById('backupMetadata').style.display = 'none';
+            document.getElementById('restoreBtn').disabled = true;
+            document.getElementById('clearBtn').disabled = true;
+            document.getElementById('restoreError').style.display = 'none';
+        }
+        
+        function restoreBackup() {
+            if (!selectedBackupFile) {
+                alert('Please select a backup file first');
+                return;
+            }
+            
+            // Show confirmation dialog
+            document.getElementById('confirmOverlay').style.display = 'block';
+            document.getElementById('confirmDialog').style.display = 'block';
+        }
+        
+        function cancelRestore() {
+            document.getElementById('confirmOverlay').style.display = 'none';
+            document.getElementById('confirmDialog').style.display = 'none';
+        }
+        
+        async function confirmRestore() {
+            document.getElementById('confirmOverlay').style.display = 'none';
+            document.getElementById('confirmDialog').style.display = 'none';
+            
+            const restoreBtn = document.getElementById('restoreBtn');
+            const loading = document.getElementById('restoreLoading');
+            const success = document.getElementById('restoreSuccess');
+            const error = document.getElementById('restoreError');
+            
+            // Hide all messages
+            success.style.display = 'none';
+            error.style.display = 'none';
+            
+            restoreBtn.disabled = true;
+            loading.style.display = 'block';
+            
+            try {
+                const formData = new FormData();
+                formData.append('file', selectedBackupFile);
+                
+                const response = await fetch('/api/backup/restore', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.error || 'Restore failed');
+                }
+                
+                success.style.display = 'block';
+                
+                // Reload page after 2 seconds
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 2000);
+                
+            } catch (err) {
+                error.textContent = '❌ Error: ' + err.message;
+                error.style.display = 'block';
+                restoreBtn.disabled = false;
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>

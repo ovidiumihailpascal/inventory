@@ -1,0 +1,187 @@
+{% extends 'layout.html' %}
+
+{% block content %}
+  <div class="card">
+    <div class="card-body">
+      <h5 class="card-title">Welcome, {{ user }}</h5>
+      <p class="text-muted">Create and manage your selling locations below.</p>
+      
+      <form id="createShopForm" class="row g-2 mb-4">
+        <div class="col-12 col-md-3">
+          <input id="shopName" class="form-control" placeholder="Shop name" required>
+        </div>
+        <div class="col-12 col-md-3">
+          <input id="shopLocation" class="form-control" placeholder="Location">
+        </div>
+        <div class="col-12 col-md-2">
+          <input id="shopPhone" class="form-control" placeholder="Phone number">
+        </div>
+        <div class="col-12 col-md-2">
+          <input id="shopEmail" class="form-control" placeholder="Email">
+        </div>
+        <div class="col-12 col-md-2 d-grid">
+          <button class="btn btn-success" type="submit">Add Shop</button>
+        </div>
+      </form>
+
+      <hr>
+
+      <div class="table-responsive">
+        <table class="table table-striped" id="shopsTable">
+          <thead>
+            <tr>
+              <th>Shop Name</th>
+              <th>Location</th>
+              <th>Phone</th>
+              <th>Email</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Shop Modal -->
+  <div class="modal fade" id="editShopModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Edit Shop</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label for="editShopName" class="form-label">Shop Name</label>
+            <input type="text" class="form-control" id="editShopName" required>
+          </div>
+          <div class="mb-3">
+            <label for="editShopLocation" class="form-label">Location</label>
+            <input type="text" class="form-control" id="editShopLocation">
+          </div>
+          <div class="mb-3">
+            <label for="editShopPhone" class="form-label">Phone Number</label>
+            <input type="text" class="form-control" id="editShopPhone">
+          </div>
+          <div class="mb-3">
+            <label for="editShopEmail" class="form-label">Email</label>
+            <input type="email" class="form-control" id="editShopEmail">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" id="saveShopBtn">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentEditShopId = null;
+    let editShopModal = null;
+
+    function initializeModal() {
+      if (!editShopModal && window.bootstrap) {
+        editShopModal = new bootstrap.Modal(document.getElementById('editShopModal'));
+      }
+    }
+
+    async function fetchShops() {
+      const res = await fetch('/api/shops');
+      const shops = await res.json();
+      const tbody = document.querySelector('#shopsTable tbody');
+      tbody.innerHTML = '';
+      for(const shop of shops) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${escapeHtml(shop.name)}</td>
+          <td>${escapeHtml(shop.location || '')}</td>
+          <td>${escapeHtml(shop.phone || '')}</td>
+          <td>${escapeHtml(shop.email || '')}</td>
+          <td class="text-end">
+            <button class="btn btn-sm btn-warning edit-shop-btn me-1" data-id="${shop.id}" data-name="${escapeHtml(shop.name)}" data-location="${escapeHtml(shop.location || '')}" data-phone="${escapeHtml(shop.phone || '')}" data-email="${escapeHtml(shop.email || '')}">Edit</button>
+            <button class="btn btn-sm btn-danger delete-shop-btn" data-id="${shop.id}">Delete</button>
+          </td>`;
+        tbody.appendChild(tr);
+      }
+
+      // Attach delete handlers
+      document.querySelectorAll('.delete-shop-btn').forEach(b => b.addEventListener('click', async e => {
+        const id = e.currentTarget.dataset.id;
+        if(!confirm('Delete this shop?')) return;
+        await fetch('/api/shops/'+id, {method:'DELETE'});
+        fetchShops();
+      }));
+
+      // Attach edit handlers
+      document.querySelectorAll('.edit-shop-btn').forEach(b => b.addEventListener('click', e => {
+        currentEditShopId = e.currentTarget.dataset.id;
+        document.getElementById('editShopName').value = e.currentTarget.dataset.name;
+        document.getElementById('editShopLocation').value = e.currentTarget.dataset.location;
+        document.getElementById('editShopPhone').value = e.currentTarget.dataset.phone;
+        document.getElementById('editShopEmail').value = e.currentTarget.dataset.email;
+        initializeModal();
+        if(editShopModal) editShopModal.show();
+      }));
+    }
+
+    function escapeHtml(unsafe) {
+      return unsafe
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    document.getElementById('createShopForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const name = document.getElementById('shopName').value.trim();
+      const location = document.getElementById('shopLocation').value.trim();
+      const phone = document.getElementById('shopPhone').value.trim();
+      const email = document.getElementById('shopEmail').value.trim();
+      if(!name) return;
+      await fetch('/api/shops', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name, location, phone, email})
+      });
+      document.getElementById('shopName').value = '';
+      document.getElementById('shopLocation').value = '';
+      document.getElementById('shopPhone').value = '';
+      document.getElementById('shopEmail').value = '';
+      fetchShops();
+    });
+
+    document.getElementById('saveShopBtn').addEventListener('click', async e => {
+      const name = document.getElementById('editShopName').value.trim();
+      const location = document.getElementById('editShopLocation').value.trim();
+      const phone = document.getElementById('editShopPhone').value.trim();
+      const email = document.getElementById('editShopEmail').value.trim();
+      if(!name) {
+        alert('Shop name is required');
+        return;
+      }
+      try {
+        const resp = await fetch(`/api/shops/${currentEditShopId}`, {
+          method:'PUT',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({name, location, phone, email})
+        });
+        if(!resp.ok) {
+          alert('Update failed');
+          return;
+        }
+        fetchShops();
+        if(editShopModal) editShopModal.hide();
+      } catch(err) {
+        console.error('Error updating shop', err);
+        alert('Network error: ' + err.message);
+      }
+    });
+
+    fetchShops();
+  </script>
+
+{% endblock %}
