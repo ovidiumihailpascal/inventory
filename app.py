@@ -30,6 +30,12 @@ app = Flask(__name__, static_folder='static', template_folder='templates')
 app.secret_key = os.environ.get('FLASK_SECRET', 'dev-secret-change-in-production')
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 
+# Environment configuration
+FLASK_ENV = os.environ.get('FLASK_ENV', 'production')
+FLASK_DEBUG = os.environ.get('FLASK_DEBUG', 'False').lower() in ('true', '1', 'yes')
+if FLASK_ENV == 'production':
+    FLASK_DEBUG = False  # Never debug in production
+
 # Simple credential from env (for demo). Set INVENTORY_USER and INVENTORY_PASS in environment for production.
 ADMIN_USER = os.environ.get('INVENTORY_USER', 'admin')
 ADMIN_PASS = os.environ.get('INVENTORY_PASS', 'admin')
@@ -1468,4 +1474,13 @@ def get_backup_info():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Only run Flask development server if explicitly in development mode
+    # In production (Docker), use Gunicorn via entrypoint.sh
+    if FLASK_ENV == 'development':
+        app.run(debug=FLASK_DEBUG, host='0.0.0.0', port=5000)
+    else:
+        # Production mode: print notice and exit
+        print("ERROR: Flask development server should not be used in production.")
+        print("This application should be run with Gunicorn via Docker or with:")
+        print("  gunicorn --bind 0.0.0.0:5000 --workers 4 --timeout 120 app:app")
+        sys.exit(1)

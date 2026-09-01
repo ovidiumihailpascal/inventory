@@ -15,5 +15,6 @@ if [ -n "$DB_HOST" ]; then
     done
 fi
 
-echo "Starting Flask application..."
-exec python app.py
+echo "Starting application with production WSGI server (Gunicorn)..."
+# Execute the CMD passed from Dockerfile/docker-compose
+exec "$@"
