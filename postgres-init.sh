@@ -9,7 +9,8 @@ set -e
 export DB_USER="${DB_USER:-inventory_app}"
 
 # Create the SQL file with substituted variables
-cat > /tmp/init-substituted.sql <<'EOF'
+# Use <<EOF (not <<'EOF') to allow bash variable expansion
+cat > /tmp/init-substituted.sql <<EOF
 -- PostgreSQL initialization script for Inventory application
 -- This script is automatically executed when the PostgreSQL container starts
 
