@@ -155,26 +155,33 @@ def get_db():
                 )
                 g.db = PostgreSQLWrapper(conn)
                 
-                # Initialize default admin user for PostgreSQL
+                # Initialize/sync admin user credentials
                 try:
-                    cur = g.db.execute('SELECT COUNT(*) as count FROM users')
-                    count_row = cur.fetchone()
-                    if count_row and count_row['count'] == 0:
-                        hashed_password = hash_password(ADMIN_PASS)
+                    # Ensure the configured INVENTORY_USER/INVENTORY_PASS exists and is admin
+                    hashed_password = hash_password(ADMIN_PASS)
+                    
+                    # Check if the configured admin user exists
+                    cur = g.db.execute('SELECT id FROM users WHERE username = %s', (ADMIN_USER,))
+                    existing_admin = cur.fetchone()
+                    
+                    if existing_admin:
+                        # User exists - update password and ensure admin role
+                        g.db.execute(
+                            'UPDATE users SET password_hash = %s, role = %s, is_default_admin = 1, password_changed_at = CURRENT_TIMESTAMP WHERE username = %s',
+                            (hashed_password, 'admin', ADMIN_USER)
+                        )
+                        g.db.commit()
+                        print(f"[AUTH] Updated admin credentials for: {ADMIN_USER}")
+                    else:
+                        # User does NOT exist - create it
                         g.db.execute(
                             'INSERT INTO users (username, password_hash, role, is_default_admin, password_changed_at) VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)',
                             (ADMIN_USER, hashed_password, 'admin', 1)
                         )
                         g.db.commit()
-                        print(f"Initialized default admin user: {ADMIN_USER}")
-                    else:
-                        # Mark the original admin user as default admin if not already marked
-                        g.db.execute('UPDATE users SET is_default_admin = 1 WHERE username = %s AND is_default_admin = 0', (ADMIN_USER,))
-                        # Set password_changed_at for default admin if it's NULL (for existing databases)
-                        g.db.execute('UPDATE users SET password_changed_at = CURRENT_TIMESTAMP WHERE username = %s AND password_changed_at IS NULL', (ADMIN_USER,))
-                        g.db.commit()
+                        print(f"[AUTH] Created admin user: {ADMIN_USER}")
                 except Exception as e:
-                    print(f"Warning: Could not initialize default admin user: {e}")
+                    print(f"[AUTH] Warning: Could not initialize/sync admin user: {e}")
             except psycopg2.Error as e:
                 print(f"PostgreSQL connection error: {e}")
                 raise
