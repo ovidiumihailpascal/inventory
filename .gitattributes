@@ -1,0 +1,8 @@
+# Auto-detect text files and normalize line endings to LF
+* text=auto
+
+# Shell scripts must use Unix line endings for Docker
+*.sh text eol=lf
+
+# SQL files
+*.sql text eol=lf
