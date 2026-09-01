@@ -50,6 +50,24 @@ def verify_password(password, password_hash):
 
 
 # ============= DATABASE WRAPPER FOR PSYCOPG2 =============
+class PostgreSQLCursorWrapper:
+    """Wrapper for psycopg2 cursor to provide SQLite-like interface."""
+    
+    def __init__(self, cursor):
+        self.cursor = cursor
+        self.lastrowid = None
+    
+    def fetchone(self):
+        return self.cursor.fetchone()
+    
+    def fetchall(self):
+        return self.cursor.fetchall()
+    
+    def __getattr__(self, name):
+        # Delegate other attributes to the underlying cursor
+        return getattr(self.cursor, name)
+
+
 class PostgreSQLWrapper:
     """Wrapper to provide SQLite-like interface for psycopg2 connections."""
     
@@ -65,18 +83,32 @@ class PostgreSQLWrapper:
         """Execute a query and return a cursor-like object."""
         cur = self.conn.cursor()
         query = self._convert_placeholders(query)
+        
+        # For INSERT statements, use RETURNING id to get the last inserted ID
+        is_insert = query.strip().upper().startswith('INSERT')
+        if is_insert and 'RETURNING' not in query.upper():
+            query = query.rstrip(';').rstrip() + ' RETURNING id'
+        
         if params:
             cur.execute(query, params)
         else:
             cur.execute(query)
-        return cur
+        
+        # For INSERT statements, fetch the returned ID
+        wrapper = PostgreSQLCursorWrapper(cur)
+        if is_insert:
+            result = cur.fetchone()
+            if result:
+                wrapper.lastrowid = result[0]
+        
+        return wrapper
     
     def executescript(self, script):
         """Execute multiple SQL statements."""
         cur = self.conn.cursor()
         cur.execute(script)
         self.conn.commit()
-        return cur
+        return PostgreSQLCursorWrapper(cur)
     
     def commit(self):
         """Commit the transaction."""
