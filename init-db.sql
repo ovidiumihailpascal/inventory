@@ -3,6 +3,17 @@
 
 -- Create tables with proper schema
 
+-- Users table with role-based access control
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'normal',
+    is_default_admin INTEGER DEFAULT 0,
+    password_changed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS shops (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
@@ -38,6 +49,16 @@ CREATE TABLE IF NOT EXISTS list_items (
     price NUMERIC(10, 2),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS backup_log (
+    id SERIAL PRIMARY KEY,
+    operation TEXT NOT NULL,
+    status TEXT NOT NULL,
+    user_id INTEGER REFERENCES users(id),
+    backup_metadata TEXT,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Create indexes for common queries

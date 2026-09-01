@@ -18,18 +18,20 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime dependencies including PostgreSQL client tools
+# Install runtime dependencies including PostgreSQL client tools and pip
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     postgresql-client \
     curl \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python dependencies from builder
-COPY --from=builder /root/.local /root/.local
+# Copy requirements first and install as root
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Set PATH to use local Python packages
-ENV PATH=/root/.local/bin:$PATH
+# Copy Python dependencies from builder (optional, for caching)
+COPY --from=builder /root/.local /root/.local
 
 # Copy application code
 COPY app.py .

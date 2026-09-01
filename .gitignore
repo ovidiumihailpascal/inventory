@@ -72,6 +72,7 @@ docker-compose.override.yml
 # Application
 app_output.log
 app.py.backup
+app.py.old
 database.py.backup
 
 # Uploads (if any)
@@ -83,3 +84,12 @@ uploads/
 .env.local
 *.pem
 *.key
+
+# Temporary test/development files
+cookies.txt
+transfer_test.json
+docker-test.ps1
+docker-test.sh
+investigate_backup.py
+transfer_fix_report.txt
+test_user_management.py

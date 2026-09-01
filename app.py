@@ -49,6 +49,54 @@ def verify_password(password, password_hash):
         return False
 
 
+# ============= DATABASE WRAPPER FOR PSYCOPG2 =============
+class PostgreSQLWrapper:
+    """Wrapper to provide SQLite-like interface for psycopg2 connections."""
+    
+    def __init__(self, conn):
+        self.conn = conn
+    
+    def _convert_placeholders(self, query):
+        """Convert SQLite '?' placeholders to PostgreSQL '%s' placeholders."""
+        # Replace ? with %s for PostgreSQL compatibility
+        return query.replace('?', '%s')
+    
+    def execute(self, query, params=None):
+        """Execute a query and return a cursor-like object."""
+        cur = self.conn.cursor()
+        query = self._convert_placeholders(query)
+        if params:
+            cur.execute(query, params)
+        else:
+            cur.execute(query)
+        return cur
+    
+    def executescript(self, script):
+        """Execute multiple SQL statements."""
+        cur = self.conn.cursor()
+        cur.execute(script)
+        self.conn.commit()
+        return cur
+    
+    def commit(self):
+        """Commit the transaction."""
+        self.conn.commit()
+    
+    def rollback(self):
+        """Rollback the transaction."""
+        self.conn.rollback()
+    
+    def close(self):
+        """Close the connection."""
+        self.conn.close()
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, *args):
+        self.close()
+
+
 def get_db():
     if 'db' not in g:
         if USE_POSTGRES:
@@ -59,10 +107,31 @@ def get_db():
                     port=os.environ.get('DB_PORT', '5432'),
                     database=os.environ.get('DB_NAME', 'inventory'),
                     user=os.environ.get('DB_USER', 'inventory_app'),
-                    password=os.environ.get('DB_PASSWORD', '')
+                    password=os.environ.get('DB_PASSWORD', ''),
+                    cursor_factory=RealDictCursor
                 )
-                conn.row_factory = lambda cur, row: dict(zip([c[0] for c in cur.description], row))
-                g.db = conn
+                g.db = PostgreSQLWrapper(conn)
+                
+                # Initialize default admin user for PostgreSQL
+                try:
+                    cur = g.db.execute('SELECT COUNT(*) as count FROM users')
+                    count_row = cur.fetchone()
+                    if count_row and count_row['count'] == 0:
+                        hashed_password = hash_password(ADMIN_PASS)
+                        g.db.execute(
+                            'INSERT INTO users (username, password_hash, role, is_default_admin, password_changed_at) VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)',
+                            (ADMIN_USER, hashed_password, 'admin', 1)
+                        )
+                        g.db.commit()
+                        print(f"Initialized default admin user: {ADMIN_USER}")
+                    else:
+                        # Mark the original admin user as default admin if not already marked
+                        g.db.execute('UPDATE users SET is_default_admin = 1 WHERE username = %s AND is_default_admin = 0', (ADMIN_USER,))
+                        # Set password_changed_at for default admin if it's NULL (for existing databases)
+                        g.db.execute('UPDATE users SET password_changed_at = CURRENT_TIMESTAMP WHERE username = %s AND password_changed_at IS NULL', (ADMIN_USER,))
+                        g.db.commit()
+                except Exception as e:
+                    print(f"Warning: Could not initialize default admin user: {e}")
             except psycopg2.Error as e:
                 print(f"PostgreSQL connection error: {e}")
                 raise
@@ -92,7 +161,7 @@ def get_db():
                     'CREATE TABLE IF NOT EXISTS shops (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, location TEXT, phone TEXT, email TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)'
                 )
                 conn.execute(
-                    'CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, shop_id INTEGER NOT NULL, qty INTEGER NOT NULL, cut_type TEXT, FOREIGN KEY(shop_id) REFERENCES shops(id) ON DELETE CASCADE)'
+                    'CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, shop_id INTEGER NOT NULL, qty INTEGER NOT NULL, cut_type TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(shop_id) REFERENCES shops(id) ON DELETE CASCADE)'
                 )
                 conn.execute(
                     'CREATE TABLE IF NOT EXISTS product_lists (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)'
@@ -114,6 +183,28 @@ def get_db():
                 # Add password_changed_at column
                 try:
                     conn.execute('ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMP')
+                except:
+                    pass  # Column already exists
+                
+                # Add created_at and updated_at to items table
+                try:
+                    conn.execute('ALTER TABLE items ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+                except:
+                    pass  # Column already exists
+                
+                try:
+                    conn.execute('ALTER TABLE items ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+                except:
+                    pass  # Column already exists
+                
+                # Add created_at and updated_at to list_items table
+                try:
+                    conn.execute('ALTER TABLE list_items ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+                except:
+                    pass  # Column already exists
+                
+                try:
+                    conn.execute('ALTER TABLE list_items ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
                 except:
                     pass  # Column already exists
                 
@@ -150,6 +241,19 @@ def login_required(fn):
         # Check if user is forced to change password
         if session.get('force_password_change'):
             return redirect(url_for('change_password_forced'))
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def api_login_required(fn):
+    """Decorator to require login for API endpoints. Returns 401 instead of redirecting."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if 'user' not in session:
+            return jsonify({'error': 'unauthorized'}), 401
+        # Check if user is forced to change password
+        if session.get('force_password_change'):
+            return jsonify({'error': 'password change required'}), 403
         return fn(*args, **kwargs)
     return wrapper
 
@@ -203,10 +307,21 @@ def login():
         cur = db.execute('SELECT id, username, password_hash, role, password_changed_at FROM users WHERE username = ?', (username,))
         user = cur.fetchone()
         
+        print(f"[DEBUG LOGIN] Username: {username}", file=sys.stderr)
+        print(f"[DEBUG LOGIN] User found: {user is not None}", file=sys.stderr)
+        
+        if user:
+            print(f"[DEBUG LOGIN] User hash type: {type(user['password_hash'])}", file=sys.stderr)
+            print(f"[DEBUG LOGIN] User hash: {user['password_hash'][:50]}", file=sys.stderr)
+            result = verify_password(password, user['password_hash'])
+            print(f"[DEBUG LOGIN] Password verify result: {result}", file=sys.stderr)
+        
         if user and verify_password(password, user['password_hash']):
             session['user'] = username
             session['user_id'] = user['id']
             session['user_role'] = user['role']
+            
+            print(f"[DEBUG LOGIN] Session set for user: {username}", file=sys.stderr)
             
             # Check if password has been changed; if not, redirect to force password change
             if user['password_changed_at'] is None:
@@ -217,9 +332,17 @@ def login():
             flash('Logged in successfully', 'success')
             return redirect(url_for('home'))
         
+        print(f"[DEBUG LOGIN] Login failed for user: {username}", file=sys.stderr)
         flash('Invalid credentials', 'danger')
     return render_template('login.html')
 
+
+@app.route('/logout', methods=['GET', 'POST'])
+def logout():
+    """Log out the user and clear the session."""
+    session.clear()
+    flash('You have been logged out', 'success')
+    return redirect(url_for('login'))
 
 
 @app.route('/change-password-forced', methods=['GET', 'POST'])
@@ -477,6 +600,8 @@ def delete_user(user_id):
 
 
 # ============= PRODUCT LISTS ENDPOINTS =============
+@app.route('/api/lists', methods=['GET'])
+@api_login_required
 def list_product_lists():
     db = get_db()
     cur = db.execute('SELECT id, name, description, created_at FROM product_lists ORDER BY id DESC')
@@ -485,6 +610,7 @@ def list_product_lists():
 
 
 @app.route('/api/lists', methods=['POST'])
+@api_login_required
 def create_product_list():
     data = request.get_json() or {}
     name = data.get('name', '').strip()
@@ -499,6 +625,7 @@ def create_product_list():
 
 
 @app.route('/api/lists/<int:list_id>', methods=['GET'])
+@api_login_required
 def get_product_list(list_id):
     db = get_db()
     cur = db.execute('SELECT id, name, description, created_at FROM product_lists WHERE id = ?', (list_id,))
@@ -515,6 +642,7 @@ def get_product_list(list_id):
 
 
 @app.route('/api/lists/<int:list_id>', methods=['PUT'])
+@api_login_required
 def update_product_list(list_id):
     data = request.get_json() or {}
     name = data.get('name')
@@ -547,6 +675,7 @@ def update_product_list(list_id):
 
 
 @app.route('/api/lists/<int:list_id>', methods=['DELETE'])
+@api_login_required
 def delete_product_list(list_id):
     db = get_db()
     cur = db.execute('SELECT id FROM product_lists WHERE id = ?', (list_id,))
@@ -558,6 +687,7 @@ def delete_product_list(list_id):
 
 
 @app.route('/api/lists/<int:list_id>/items', methods=['POST'])
+@api_login_required
 def add_list_item(list_id):
     data = request.get_json() or {}
     item_name = data.get('item_name', '').strip()
@@ -601,6 +731,7 @@ def add_list_item(list_id):
 
 
 @app.route('/api/lists/<int:list_id>/items/<int:item_id>', methods=['PUT'])
+@api_login_required
 def update_list_item(list_id, item_id):
     data = request.get_json() or {}
     item_name = data.get('item_name')
@@ -661,6 +792,7 @@ def update_list_item(list_id, item_id):
 
 
 @app.route('/api/lists/<int:list_id>/items/<int:item_id>', methods=['DELETE'])
+@api_login_required
 def delete_list_item(list_id, item_id):
     db = get_db()
     cur = db.execute('SELECT id FROM list_items WHERE id = ? AND list_id = ?', (item_id, list_id))
@@ -672,6 +804,7 @@ def delete_list_item(list_id, item_id):
 
 
 @app.route('/api/items', methods=['GET'])
+@api_login_required
 def list_items():
     db = get_db()
     cur = db.execute('''
@@ -704,6 +837,7 @@ def list_items():
 
 
 @app.route('/api/items', methods=['POST'])
+@api_login_required
 def add_item():
     data = request.get_json() or {}
     name = data.get('name', '').strip()
@@ -727,6 +861,7 @@ def add_item():
 
 
 @app.route('/api/items/<int:item_id>', methods=['GET'])
+@api_login_required
 def get_item(item_id):
     db = get_db()
     cur = db.execute('SELECT id, name, qty, cut_type FROM items WHERE id = ?', (item_id,))
@@ -737,6 +872,7 @@ def get_item(item_id):
 
 
 @app.route('/api/items/<int:item_id>', methods=['PUT'])
+@api_login_required
 def update_item(item_id):
     data = request.get_json() or {}
     qty = data.get('qty')
@@ -760,6 +896,7 @@ def update_item(item_id):
 
 
 @app.route('/api/items/<int:item_id>', methods=['DELETE'])
+@api_login_required
 def delete_item(item_id):
     db = get_db()
     cur = db.execute('SELECT id FROM items WHERE id = ?', (item_id,))
@@ -771,6 +908,7 @@ def delete_item(item_id):
 
 
 @app.route('/api/shops', methods=['GET'])
+@api_login_required
 def list_shops():
     db = get_db()
     cur = db.execute('SELECT id, name, location, phone, email, created_at FROM shops ORDER BY id DESC')
@@ -779,6 +917,7 @@ def list_shops():
 
 
 @app.route('/api/shops', methods=['POST'])
+@api_login_required
 def create_shop():
     data = request.get_json() or {}
     name = data.get('name', '').strip()
@@ -795,6 +934,7 @@ def create_shop():
 
 
 @app.route('/api/shops/<int:shop_id>', methods=['GET'])
+@api_login_required
 def get_shop(shop_id):
     db = get_db()
     cur = db.execute('SELECT id, name, location, phone, email, created_at FROM shops WHERE id = ?', (shop_id,))
@@ -805,6 +945,7 @@ def get_shop(shop_id):
 
 
 @app.route('/api/shops/<int:shop_id>', methods=['PUT'])
+@api_login_required
 def update_shop(shop_id):
     data = request.get_json() or {}
     name = data.get('name')
@@ -849,6 +990,7 @@ def update_shop(shop_id):
 
 
 @app.route('/api/shops/<int:shop_id>', methods=['DELETE'])
+@api_login_required
 def delete_shop(shop_id):
     db = get_db()
     cur = db.execute('SELECT id FROM shops WHERE id = ?', (shop_id,))
@@ -859,7 +1001,91 @@ def delete_shop(shop_id):
     return '', 204
 
 
+@app.route('/api/transfer', methods=['POST'])
+@api_login_required
+def transfer_stock():
+    """Transfer stock of a product between shops.
+    
+    Expected JSON body:
+    {
+       "product_name": "Product Name",
+       "from_shop_id": 1,
+       "to_shop_id": 2,
+       "quantity": 5
+    }
+    """
+    data = request.get_json() or {}
+    product_name = data.get('product_name')
+    from_shop_id = data.get('from_shop_id')
+    to_shop_id = data.get('to_shop_id')
+    qty = data.get('quantity')
+    
+    # Validate inputs
+    if not product_name or from_shop_id is None or to_shop_id is None or qty is None:
+       return jsonify({'error': 'Missing required fields'}), 400
+    
+    try:
+       from_shop_id = int(from_shop_id)
+       to_shop_id = int(to_shop_id)
+       qty = int(qty)
+    except (ValueError, TypeError):
+       return jsonify({'error': 'Invalid data types'}), 400
+    
+    if qty <= 0:
+       return jsonify({'error': 'Quantity must be positive'}), 400
+    
+    if from_shop_id == to_shop_id:
+       return jsonify({'error': 'Cannot transfer to the same shop'}), 400
+    
+    db = get_db()
+    
+    # Find the source item by product name and shop
+    cur = db.execute(
+       'SELECT id, qty, cut_type FROM items WHERE name = ? AND shop_id = ?',
+       (product_name, from_shop_id)
+    )
+    source_item = cur.fetchone()
+    
+    if source_item is None:
+       return jsonify({'error': 'Product not found in source shop'}), 404
+    
+    if source_item['qty'] < qty:
+       return jsonify({'error': f'Insufficient quantity. Available: {source_item["qty"]}'}), 400
+    
+    try:
+       # Deduct from source shop
+       db.execute('UPDATE items SET qty = qty - ? WHERE id = ?', (qty, source_item['id']))
+        
+       # Check if product exists in destination shop with same cut_type
+       cur = db.execute(
+           'SELECT id FROM items WHERE name = ? AND shop_id = ? AND cut_type = ?',
+           (product_name, to_shop_id, source_item['cut_type'])
+       )
+       dest_item = cur.fetchone()
+        
+       if dest_item:
+           # Add to existing destination item
+           db.execute('UPDATE items SET qty = qty + ? WHERE id = ?', (qty, dest_item['id']))
+       else:
+           # Create new item in destination shop
+           db.execute(
+               'INSERT INTO items (name, shop_id, qty, cut_type) VALUES (?, ?, ?, ?)',
+               (product_name, to_shop_id, qty, source_item['cut_type'])
+           )
+        
+       db.commit()
+       return jsonify({
+           'success': True,
+           'message': f'Transferred {qty} units from shop {from_shop_id} to shop {to_shop_id}'
+       }), 200
+    
+    except Exception as e:
+       db.rollback()
+       return jsonify({'error': f'Transfer failed: {str(e)}'}), 500
+
+
 @app.route('/api/items/<int:item_id>/transfer', methods=['POST'])
+@api_login_required
 def transfer_item(item_id):
     data = request.get_json() or {}
     to_shop_id = data.get('to_shop_id')
@@ -1034,18 +1260,28 @@ def restore_from_backup(zip_buffer):
         
         db = get_db()
         
-        # Get list of tables to clear
-        tables_to_clear = ['items', 'list_items', 'product_lists', 'shops']
+        # Get list of tables to clear (includes users now)
+        # Delete in order of foreign key dependencies
+        tables_to_clear = ['items', 'list_items', 'product_lists', 'shops', 'users']
         
-        # Clear existing data (but preserve users and backup_log)
+        # Clear existing data (but preserve backup_log)
+        # Delete in order to avoid foreign key constraint violations
         for table in tables_to_clear:
             try:
                 db.execute(f'DELETE FROM {table}')
-            except:
-                pass  # Table might not exist
+                db.commit()  # Commit after each successful delete
+            except Exception as e:
+                # Try to rollback if delete failed
+                try:
+                    db.rollback()
+                except:
+                    pass
+                # Continue with next table
         
-        # Restore tables (skip users table)
-        tables_to_restore = [t for t in db_data.get('tables', {}).keys() if t not in ['users', 'backup_log']]
+        # Restore all tables except backup_log
+        tables_to_restore = [t for t in db_data.get('tables', {}).keys() if t != 'backup_log']
+        
+        restore_errors = []  # Track errors for debugging
         
         for table_name in tables_to_restore:
             table_data = db_data['tables'][table_name]
@@ -1059,7 +1295,7 @@ def restore_from_backup(zip_buffer):
             
             # Filter out ID column for insertion (it will be auto-generated)
             # Actually, keep ID for data integrity
-            for row in rows:
+            for i, row in enumerate(rows):
                 placeholders = ','.join(['?' for _ in columns])
                 values = [row.get(col) for col in columns]
                 try:
@@ -1067,11 +1303,39 @@ def restore_from_backup(zip_buffer):
                         f'INSERT INTO {table_name} ({",".join(columns)}) VALUES ({placeholders})',
                         values
                     )
+                    # Commit each successful insert
+                    db.commit()
                 except Exception as e:
-                    # Skip rows that cause conflicts (e.g., duplicate IDs)
-                    pass
+                    error_str = str(e)
+                    # Skip duplicate key errors for users table (expected for default admin)
+                    if table_name == 'users' and 'duplicate key' in error_str.lower():
+                        # Just rollback and continue - user already exists
+                        try:
+                            db.rollback()
+                        except:
+                            pass
+                    else:
+                        # Log errors for debugging
+                        error_msg = f'Table {table_name}, row {i}: {type(e).__name__}: {e}'
+                        restore_errors.append(error_msg)
+                        # Try to rollback failed insert
+                        try:
+                            db.rollback()
+                        except:
+                            pass
         
-        db.commit()
+        # Final commit if needed
+        try:
+            db.commit()
+        except:
+            pass
+        
+        # Print errors if any (for debugging)
+        if restore_errors:
+            print(f"[RESTORE] Warning: {len(restore_errors)} errors during restore:")
+            for error in restore_errors[:10]:  # Print first 10 errors
+                print(f"  - {error}")
+        
         return True, 'Database restored successfully'
     
     except Exception as e:
