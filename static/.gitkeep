@@ -1,0 +1,2 @@
+# This file ensures the static directory is tracked by Git
+# Empty directories are not tracked by Git, so this placeholder file preserves the directory structure
