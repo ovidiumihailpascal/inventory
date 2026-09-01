@@ -105,7 +105,12 @@ class PostgreSQLWrapper:
         if is_insert:
             result = cur.fetchone()
             if result:
-                wrapper.lastrowid = result[0]
+                # Handle both dict results (RealDictCursor) and tuple results
+                if isinstance(result, dict):
+                    wrapper.lastrowid = result.get('id')
+                else:
+                    # Tuple result from regular cursor
+                    wrapper.lastrowid = result[0]
         
         return wrapper
     
