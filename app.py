@@ -1554,6 +1554,10 @@ def restore_from_backup(zip_buffer):
             db_data = json.loads(zf.read('database.json').decode('utf-8'))
         
         db = get_db()
+
+        # Keep the audit trail of prior backup attempts, but detach it from the
+        # users about to be replaced. Otherwise PostgreSQL blocks DELETE users.
+        db.execute('UPDATE backup_log SET user_id = NULL')
         
         # Get list of tables to clear (includes users now)
         # Delete in order of foreign key dependencies
