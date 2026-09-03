@@ -1,0 +1,20 @@
+{% extends 'layout.html' %}
+{% block content %}
+<style>
+  .report-card { border-radius: 1rem; box-shadow: 0 .15rem .7rem rgba(0,0,0,.08); }
+  .record { border-left: .3rem solid #0d6efd; }
+  .receipt { border-left-color: #198754; }
+  @media (max-width:576px) { .container { padding:0 .75rem; } }
+</style>
+<div class="d-flex justify-content-between align-items-center mb-3"><div><h1 class="h3 mb-0">Reports</h1><small class="text-muted">Sales and stock activity</small></div></div>
+<form class="card report-card mb-3" onsubmit="loadReport(event)"><div class="card-body"><div class="row g-2 align-items-end"><div class="col-6"><label class="form-label">From</label><input id="start" type="date" class="form-control" required></div><div class="col-6"><label class="form-label">To</label><input id="end" type="date" class="form-control" required></div><div class="col-12 d-grid"><button class="btn btn-primary">Show report</button></div></div></div></form>
+<div class="row g-2 mb-3"><div class="col-6"><div class="card report-card"><div class="card-body"><small>Sales total</small><strong id="salesTotal" class="d-block fs-5">—</strong><small id="salesKg" class="text-muted"></small></div></div></div><div class="col-6"><div class="card report-card"><div class="card-body"><small>Stock added</small><strong id="stockAdded" class="d-block fs-5">—</strong><small id="stockAddedKg" class="text-muted"></small></div></div></div></div>
+<h2 class="h5">Sales</h2><div id="sales" class="vstack gap-2 mb-4"></div>
+<h2 class="h5">Stock added</h2><div id="receipts" class="vstack gap-2"></div>
+<script>
+const money=n=>new Intl.NumberFormat('ro-RO',{style:'currency',currency:'RON'}).format(n||0); const escape=v=>{const d=document.createElement('div');d.textContent=v||'';return d.innerHTML};
+function iso(d){return d.toISOString().slice(0,10)}; const now=new Date(); start.value=iso(new Date(now.getFullYear(),now.getMonth(),1)); end.value=iso(now);
+async function loadReport(e){if(e)e.preventDefault();const r=await fetch(`/api/reports/activity?start=${start.value}&end=${end.value}`);const data=await r.json();if(!r.ok){alert(data.error||'Could not load report');return;}const total=data.sales.reduce((sum,x)=>sum+Number(x.total_amount),0), sold=data.sales.reduce((sum,x)=>sum+Number(x.quantity_kg),0), added=data.stock_receipts.reduce((sum,x)=>sum+Number(x.quantity_kg*x.cost_price),0), addedKg=data.stock_receipts.reduce((sum,x)=>sum+Number(x.quantity_kg),0);salesTotal.textContent=money(total);salesKg.textContent=`${sold.toFixed(3)} kg sold`;stockAdded.textContent=money(added);stockAddedKg.textContent=`${addedKg.toFixed(3)} kg added`;sales.innerHTML=data.sales.length?data.sales.map(x=>`<div class="card record"><div class="card-body py-2"><strong>${escape(x.product_name)}</strong><span class="float-end">${money(x.total_amount)}</span><div class="small text-muted">${Number(x.quantity_kg).toFixed(3)} kg × ${money(x.price_per_kg)}/kg</div><div class="small">Sold by: <strong>${escape(x.username)}</strong>${x.customer_name?` · Customer: ${escape(x.customer_name)}`:''}</div><small class="text-muted">${x.created_at}</small></div></div>`).join(''):'<p class="text-muted">No sales in this period.</p>';receipts.innerHTML=data.stock_receipts.length?data.stock_receipts.map(x=>`<div class="card record receipt"><div class="card-body py-2"><strong>${escape(x.product_name)}</strong><span class="float-end">${Number(x.quantity_kg).toFixed(3)} kg</span><div class="small text-muted">Cost ${money(x.cost_price)}/kg · Selling ${money(x.selling_price)}/kg</div><div class="small">Added by: <strong>${escape(x.username)}</strong>${x.batch_number?` · Batch: ${escape(x.batch_number)}`:''}${x.expiration_date?` · Expires: ${x.expiration_date}`:''}</div><small class="text-muted">${x.created_at}</small></div></div>`).join(''):'<p class="text-muted">No stock was added in this period.</p>';}
+loadReport();
+</script>
+{% endblock %}

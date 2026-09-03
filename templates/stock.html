@@ -1,0 +1,78 @@
+{% extends 'layout.html' %}
+{% block content %}
+<style>
+  .metric { border: 0; border-radius: 1rem; box-shadow: 0 .15rem .7rem rgba(0,0,0,.08); }
+  .metric .value { font-size: 1.35rem; font-weight: 700; }
+  .action-card { border-radius: 1rem; }
+  .product-card { border-left: .35rem solid #0d6efd; }
+  .product-card.low { border-left-color: #dc3545; }
+  @media (max-width: 576px) { .container { padding: 0 .75rem; } .btn-lg { min-height: 52px; } }
+</style>
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div><h1 class="h3 mb-0">Central stock</h1><small class="text-muted">{{ user }}</small></div>
+  <button class="btn btn-outline-primary position-relative" data-bs-toggle="modal" data-bs-target="#notificationsModal" onclick="loadNotifications()">🔔<span id="notificationCount" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger d-none"></span></button>
+</div>
+<div class="row g-2 mb-3">
+  <div class="col-6 col-lg-3"><div class="card metric"><div class="card-body p-3"><small>Stock value</small><div class="value" id="stockValue">—</div></div></div></div>
+  <div class="col-6 col-lg-3"><div class="card metric"><div class="card-body p-3"><small>In stock</small><div class="value" id="stockKg">—</div></div></div></div>
+  <div class="col-6 col-lg-3"><div class="card metric"><div class="card-body p-3"><small>Sold today</small><div class="value" id="todayKg">—</div></div></div></div>
+  <div class="col-6 col-lg-3"><div class="card metric"><div class="card-body p-3"><small>Today (RON)</small><div class="value" id="todayRevenue">—</div></div></div></div>
+</div>
+<div class="card metric mb-3"><div class="card-body py-2"><div class="d-flex justify-content-between align-items-center"><strong>This month: stock movement</strong><small id="movementRange" class="text-muted"></small></div><div class="row mt-1"><div class="col-6"><small class="text-muted">In</small><div id="movementIn">—</div></div><div class="col-6"><small class="text-muted">Out</small><div id="movementOut">—</div></div></div></div></div>
+<div class="row g-2 mb-3">
+  <div class="col-6"><button class="btn btn-success btn-lg w-100" data-bs-toggle="modal" data-bs-target="#addProductModal">＋ Add product</button></div>
+  <div class="col-6"><button class="btn btn-primary btn-lg w-100" onclick="openSale()">Sell product</button></div>
+</div>
+<input id="search" class="form-control form-control-lg mb-3" placeholder="Search product or SKU" oninput="renderProducts()">
+<div id="products" class="vstack gap-2"></div>
+
+<div class="modal fade" id="addProductModal" tabindex="-1"><div class="modal-dialog modal-dialog-scrollable"><form class="modal-content" onsubmit="addProduct(event)"><div class="modal-header"><h2 class="h5 modal-title">Add product</h2><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><label class="form-label">Product name *</label><input id="newName" class="form-control mb-2" required><label class="form-label">SKU / barcode</label><div class="input-group mb-2"><input id="newSku" class="form-control" placeholder="Scan or enter barcode"><button class="btn btn-outline-primary" type="button" onclick="startScanner('product')">Scan</button></div><div class="row g-2"><div class="col-6"><label class="form-label">Starting kg</label><input id="newQty" type="number" inputmode="decimal" step="0.001" min="0" value="0" class="form-control"></div><div class="col-6"><label class="form-label">Low-stock kg</label><input id="newThreshold" type="number" inputmode="decimal" step="0.001" min="0" value="0" class="form-control"></div></div><div class="row g-2 mt-1"><div class="col-6"><label class="form-label">Cost/kg (RON)</label><input id="newCost" type="number" inputmode="decimal" step="0.01" min="0" value="0" class="form-control"></div><div class="col-6"><label class="form-label">Selling/kg (RON)</label><input id="newSelling" type="number" inputmode="decimal" step="0.01" min="0" value="0" class="form-control"></div></div><label class="form-label mt-2">Batch number (optional)</label><input id="newBatch" class="form-control"><label class="form-label mt-2">Expiration date (optional)</label><input id="newExpiry" type="date" class="form-control"></div><div class="modal-footer"><button class="btn btn-success w-100">Save product</button></div></form></div></div>
+<div class="modal fade" id="saleModal" tabindex="-1"><div class="modal-dialog"><form class="modal-content" onsubmit="saveSale(event)"><div class="modal-header"><h2 class="h5 modal-title">Sell product</h2><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><label class="form-label">Product</label><div class="input-group mb-1"><select id="saleItem" class="form-select" onchange="fillSalePrice()"></select><button class="btn btn-outline-primary" type="button" onclick="startScanner()">Scan</button></div><small id="saleStockPrice" class="text-muted d-block mb-2"></small><label class="form-label">Price/kg (RON) <span class="text-muted">(optional)</span></label><input id="salePrice" type="number" inputmode="decimal" step="0.01" min="0" class="form-control mb-1" placeholder="Uses product stock price/kg"><small class="text-muted d-block mb-2">Leave blank to use the product’s stock selling price/kg.</small><label class="form-label">Kilograms *</label><input id="saleQty" type="number" inputmode="decimal" step="0.001" min="0.001" class="form-control mb-2" required><label class="form-label">Customer / company <span class="text-muted">(optional)</span></label><input id="saleCustomer" class="form-control" placeholder="Name or company"></div><div class="modal-footer"><button class="btn btn-primary w-100">Confirm sale</button></div></form></div></div>
+<div class="modal fade" id="scannerModal" tabindex="-1"><div class="modal-dialog modal-fullscreen-sm-down"><div class="modal-content"><div class="modal-header"><h2 class="h5 modal-title">Scan product barcode</h2><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><video id="barcodeVideo" class="w-100 bg-dark rounded" autoplay muted playsinline></video><p id="scannerStatus" class="text-muted small mt-2 mb-0">Point the camera at the barcode.</p><p class="small text-muted">If scanning is unavailable, select the product manually.</p></div></div></div></div>
+<div class="modal fade" id="receiveModal" tabindex="-1"><div class="modal-dialog"><form class="modal-content" onsubmit="receive(event)"><div class="modal-header"><h2 class="h5 modal-title">Add stock</h2><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input id="receiveItem" type="hidden"><label class="form-label">Kilograms *</label><input id="receiveQty" type="number" inputmode="decimal" step="0.001" min="0.001" class="form-control mb-2" required><div class="row g-2"><div class="col-6"><label class="form-label">Cost/kg</label><input id="receiveCost" type="number" inputmode="decimal" step="0.01" min="0" class="form-control" required></div><div class="col-6"><label class="form-label">Selling/kg</label><input id="receiveSelling" type="number" inputmode="decimal" step="0.01" min="0" class="form-control" required></div></div><label class="form-label mt-2">Batch number</label><input id="receiveBatch" class="form-control"><label class="form-label mt-2">Expiration date</label><input id="receiveExpiry" type="date" class="form-control"></div><div class="modal-footer"><button class="btn btn-success w-100">Add to stock</button></div></form></div></div>
+<div class="modal fade" id="notificationsModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h2 class="h5 modal-title">Notifications</h2><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="list-group list-group-flush" id="notifications"></div></div></div></div>
+<script>
+let products=[]; const money=n=>new Intl.NumberFormat('ro-RO',{style:'currency',currency:'RON'}).format(n||0); const modal=id=>bootstrap.Modal.getOrCreateInstance(document.getElementById(id));
+let scannerStream=null, scannerTimer=null, scannerTarget='sale';
+async function json(url, options={}) { const r=await fetch(url,options); const body=await r.json().catch(()=>({})); if(!r.ok) throw Error(body.error||'Request failed'); return body; }
+async function load(){ products=await json('/api/central/items'); const [d,m]=await Promise.all([json('/api/dashboard'),json('/api/reports/movement')]); document.querySelector('#stockValue').textContent=money(d.stock_value); document.querySelector('#stockKg').textContent=`${d.stock_kg.toFixed(3)} kg`; document.querySelector('#todayKg').textContent=`${d.today_kg.toFixed(3)} kg`; document.querySelector('#todayRevenue').textContent=money(d.today_revenue); movementRange.textContent=`${m.start} – ${m.end}`; movementIn.textContent=`${m.incoming_kg.toFixed(3)} kg · ${money(m.incoming_amount)}`; movementOut.textContent=`${m.outgoing_kg.toFixed(3)} kg · ${money(m.outgoing_amount)}`; renderProducts(); loadNotifications(true); }
+function renderProducts(){ const q=document.querySelector('#search').value.toLowerCase(); const shown=products.filter(p=>`${p.name} ${p.sku||''}`.toLowerCase().includes(q)); document.querySelector('#products').innerHTML=shown.length?shown.map(p=>`<div class="card product-card ${p.qty<=p.low_stock_threshold&&p.low_stock_threshold>0?'low':''}"><div class="card-body py-3"><div class="d-flex justify-content-between gap-2"><div><strong>${escape(p.name)}</strong><div class="text-muted small">${p.sku?escape(p.sku)+' · ':''}${Number(p.qty).toFixed(3)} kg · ${money(p.selling_price)}/kg</div></div><strong>${money(p.stock_value)}</strong></div><button class="btn btn-outline-success btn-sm mt-2" onclick="openReceive(${p.id})">Add stock</button> <button class="btn btn-outline-primary btn-sm mt-2" onclick="openSale(${p.id})">Sell</button></div></div>`).join(''):'<p class="text-center text-muted py-4">No products yet. Add your first product.</p>'; }
+function escape(v){const d=document.createElement('div');d.textContent=v||'';return d.innerHTML;}
+async function addProduct(e){e.preventDefault(); try {await json('/api/central/items',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:newName.value,sku:newSku.value,quantity_kg:newQty.value,selling_price:newSelling.value,cost_price:newCost.value,low_stock_threshold:newThreshold.value,batch_number:newBatch.value,expiration_date:newExpiry.value})}); e.target.reset(); modal('addProductModal').hide(); load();}catch(e){alert(e.message)}}
+function openSale(id){ saleItem.innerHTML=products.map(p=>`<option value="${p.id}">${escape(p.name)} (${Number(p.qty).toFixed(3)} kg)</option>`).join(''); if(id) saleItem.value=id; fillSalePrice(); modal('saleModal').show(); }
+function fillSalePrice(){const p=products.find(x=>x.id==saleItem.value); salePrice.value=''; saleStockPrice.textContent=p?`Stock selling price: ${money(p.selling_price)}/kg`:'';}
+async function startScanner(target='sale'){
+  if(!('BarcodeDetector' in window)){alert('Barcode scanning is not supported by this browser. Please use product search or SKU selection.');return;}
+  try {
+    scannerTarget=target;
+    scannerStatus.textContent='Starting camera…';
+    scannerStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    barcodeVideo.srcObject=scannerStream; modal('scannerModal').show();
+    const detector=new BarcodeDetector({formats:['ean_13','ean_8','code_128','code_39','upc_a','upc_e','qr_code']});
+    scannerTimer=setInterval(async()=>{
+      if(!barcodeVideo.videoWidth)return;
+      try { const codes=await detector.detect(barcodeVideo); if(codes.length) barcodeScanned(codes[0].rawValue); } catch(_) {}
+    },300);
+  } catch(error) { scannerStatus.textContent='Camera could not be opened.'; alert('Camera access is required to scan. Check browser permission and use HTTPS.'); stopScanner(); }
+}
+function barcodeScanned(code){
+  if(scannerTarget==='product'){
+    const existing=products.find(p=>(p.sku||'').trim().toLowerCase()===code.trim().toLowerCase());
+    stopScanner();modal('scannerModal').hide();
+    if(existing){ modal('addProductModal').hide(); openReceive(existing.id); return; }
+    newSku.value=code;newName.focus();return;
+  }
+  const product=products.find(p=>(p.sku||'').trim().toLowerCase()===code.trim().toLowerCase());
+  if(!product){scannerStatus.textContent=`Barcode ${code} is not assigned to a product.`;return;}
+  saleItem.value=product.id; fillSalePrice(); stopScanner(); modal('scannerModal').hide(); saleQty.focus();
+}
+function stopScanner(){if(scannerTimer){clearInterval(scannerTimer);scannerTimer=null;}if(scannerStream){scannerStream.getTracks().forEach(track=>track.stop());scannerStream=null;}barcodeVideo.srcObject=null;}
+document.getElementById('scannerModal').addEventListener('hidden.bs.modal',stopScanner);
+async function saveSale(e){e.preventDefault();try{const d=await json(`/api/central/items/${saleItem.value}/sell`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quantity_kg:saleQty.value,price_per_kg:salePrice.value,customer_name:saleCustomer.value})});alert(`Sale recorded: ${money(d.total_amount)}`);e.target.reset();modal('saleModal').hide();load()}catch(e){alert(e.message)}}
+function openReceive(id){const p=products.find(x=>x.id===id); receiveItem.value=id;receiveCost.value=p.cost_price;receiveSelling.value=p.selling_price;modal('receiveModal').show();}
+async function receive(e){e.preventDefault();try{await json(`/api/central/items/${receiveItem.value}/receive`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quantity_kg:receiveQty.value,cost_price:receiveCost.value,selling_price:receiveSelling.value,batch_number:receiveBatch.value,expiration_date:receiveExpiry.value})});e.target.reset();modal('receiveModal').hide();load()}catch(e){alert(e.message)}}
+async function loadNotifications(silent=false){const n=await json('/api/notifications');const unread=n.filter(x=>!x.is_read).length;notificationCount.textContent=unread;notificationCount.classList.toggle('d-none',!unread);if(!silent)notifications.innerHTML=n.length?n.map(x=>`<button class="list-group-item list-group-item-action ${x.is_read?'':'list-group-item-warning'}" onclick="readNotification(${x.id})">${escape(x.message)}<small class="d-block text-muted">${x.created_at}</small></button>`).join(''):'<p class="p-3 text-muted">No notifications.</p>';}
+async function readNotification(id){await json(`/api/notifications/${id}/read`,{method:'POST'});loadNotifications();}
+load();
+</script>
+{% endblock %}

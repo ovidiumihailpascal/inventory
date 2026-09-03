@@ -61,6 +61,49 @@ CREATE TABLE IF NOT EXISTS backup_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Single-location, weight-based inventory extensions.  Existing shop data is
+-- retained for backwards compatibility; new screens use the Central Stock shop.
+ALTER TABLE items ALTER COLUMN qty TYPE NUMERIC(12,3);
+ALTER TABLE items ADD COLUMN IF NOT EXISTS sku TEXT;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS selling_price NUMERIC(12,2) DEFAULT 0;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS cost_price NUMERIC(12,2) DEFAULT 0;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS low_stock_threshold NUMERIC(12,3) DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS stock_receipts (
+    id SERIAL PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    quantity_kg NUMERIC(12,3) NOT NULL CHECK (quantity_kg > 0),
+    cost_price NUMERIC(12,2) NOT NULL DEFAULT 0,
+    selling_price NUMERIC(12,2) NOT NULL DEFAULT 0,
+    batch_number TEXT,
+    expiration_date DATE,
+    user_id INTEGER REFERENCES users(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sales (
+    id SERIAL PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE RESTRICT,
+    quantity_kg NUMERIC(12,3) NOT NULL CHECK (quantity_kg > 0),
+    price_per_kg NUMERIC(12,2) NOT NULL,
+    total_amount NUMERIC(12,2) NOT NULL,
+    customer_name TEXT,
+    user_id INTEGER REFERENCES users(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id SERIAL PRIMARY KEY,
+    item_id INTEGER REFERENCES items(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL,
+    is_read INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at);
+CREATE INDEX IF NOT EXISTS idx_receipts_expiration_date ON stock_receipts(expiration_date);
+
 -- Create indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_items_shop_id ON items(shop_id);
 CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);

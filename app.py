@@ -4,7 +4,7 @@ import os
 import sys
 import bcrypt
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import zipfile
 import tempfile
@@ -39,6 +39,7 @@ if FLASK_ENV == 'production':
 # Simple credential from env (for demo). Set INVENTORY_USER and INVENTORY_PASS in environment for production.
 ADMIN_USER = os.environ.get('INVENTORY_USER', 'admin')
 ADMIN_PASS = os.environ.get('INVENTORY_PASS', 'admin')
+WEIGHT_SCHEMA_READY = False
 
 
 # ============= PASSWORD HASHING UTILITIES =============
@@ -273,6 +274,7 @@ def get_db():
                     # Set password_changed_at for default admin if it's NULL (for existing databases)
                     conn.execute('UPDATE users SET password_changed_at = CURRENT_TIMESTAMP WHERE username = ? AND password_changed_at IS NULL', (ADMIN_USER,))
     
+    ensure_weight_inventory_schema(g.db)
     return g.db
 
 
@@ -281,6 +283,64 @@ def close_db(exception=None):
     db = g.pop('db', None)
     if db is not None:
         db.close()
+
+
+def ensure_weight_inventory_schema(db):
+    """Apply idempotent, in-app migrations for Docker volumes created by older releases."""
+    global WEIGHT_SCHEMA_READY
+    if WEIGHT_SCHEMA_READY:
+        return
+    if USE_POSTGRES:
+        statements = [
+            'ALTER TABLE items ALTER COLUMN qty TYPE NUMERIC(12,3)',
+            'ALTER TABLE items ADD COLUMN IF NOT EXISTS sku TEXT',
+            'ALTER TABLE items ADD COLUMN IF NOT EXISTS selling_price NUMERIC(12,2) DEFAULT 0',
+            'ALTER TABLE items ADD COLUMN IF NOT EXISTS cost_price NUMERIC(12,2) DEFAULT 0',
+            'ALTER TABLE items ADD COLUMN IF NOT EXISTS low_stock_threshold NUMERIC(12,3) DEFAULT 0',
+            '''CREATE TABLE IF NOT EXISTS stock_receipts (id SERIAL PRIMARY KEY, item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE, quantity_kg NUMERIC(12,3) NOT NULL, cost_price NUMERIC(12,2) NOT NULL DEFAULT 0, selling_price NUMERIC(12,2) NOT NULL DEFAULT 0, batch_number TEXT, expiration_date DATE, user_id INTEGER REFERENCES users(id), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''',
+            '''CREATE TABLE IF NOT EXISTS sales (id SERIAL PRIMARY KEY, item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE RESTRICT, quantity_kg NUMERIC(12,3) NOT NULL, price_per_kg NUMERIC(12,2) NOT NULL, total_amount NUMERIC(12,2) NOT NULL, customer_name TEXT, user_id INTEGER REFERENCES users(id), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''',
+            '''CREATE TABLE IF NOT EXISTS notifications (id SERIAL PRIMARY KEY, item_id INTEGER REFERENCES items(id) ON DELETE CASCADE, kind TEXT NOT NULL, message TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''',
+        ]
+    else:
+        statements = [
+            'ALTER TABLE items ADD COLUMN sku TEXT',
+            'ALTER TABLE items ADD COLUMN selling_price REAL DEFAULT 0',
+            'ALTER TABLE items ADD COLUMN cost_price REAL DEFAULT 0',
+            'ALTER TABLE items ADD COLUMN low_stock_threshold REAL DEFAULT 0',
+            '''CREATE TABLE IF NOT EXISTS stock_receipts (id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE, quantity_kg REAL NOT NULL, cost_price REAL NOT NULL DEFAULT 0, selling_price REAL NOT NULL DEFAULT 0, batch_number TEXT, expiration_date TEXT, user_id INTEGER REFERENCES users(id), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''',
+            '''CREATE TABLE IF NOT EXISTS sales (id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE RESTRICT, quantity_kg REAL NOT NULL, price_per_kg REAL NOT NULL, total_amount REAL NOT NULL, customer_name TEXT, user_id INTEGER REFERENCES users(id), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''',
+            '''CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INTEGER REFERENCES items(id) ON DELETE CASCADE, kind TEXT NOT NULL, message TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''',
+        ]
+    for statement in statements:
+        try:
+            db.execute(statement)
+            db.commit()
+        except Exception as error:
+            # Duplicate SQLite columns are expected after the first run.
+            db.rollback()
+            if 'duplicate column' not in str(error).lower():
+                raise
+    WEIGHT_SCHEMA_READY = True
+
+
+def central_shop_id(db):
+    """Keep one logical location without deleting legacy shop records."""
+    shop = db.execute('SELECT id FROM shops WHERE name = ?', ('Central Stock',)).fetchone()
+    if shop:
+        return shop['id']
+    result = db.execute('INSERT INTO shops (name, location) VALUES (?, ?)', ('Central Stock', 'Central location'))
+    db.commit()
+    return result.lastrowid
+
+
+def number(value, field, minimum=0):
+    try:
+        parsed = round(float(value), 3)
+    except (ValueError, TypeError):
+        raise ValueError(f'{field} must be a number')
+    if parsed < minimum:
+        raise ValueError(f'{field} must be at least {minimum}')
+    return parsed
 
 
 def login_required(fn):
@@ -329,18 +389,202 @@ def admin_required(fn):
 @app.route('/')
 @login_required
 def home():
-    # Get user role for template
-    db = get_db()
-    cur = db.execute('SELECT role FROM users WHERE username = ?', (session['user'],))
-    user_info = cur.fetchone()
-    user_role = user_info['role'] if user_info else 'normal'
-    return render_template('home.html', user=session.get('user'), user_role=user_role)
+    return redirect(url_for('stock'))
 
 
 @app.route('/inventory')
 @login_required
 def inventory():
     return render_template('index.html', user=session.get('user'))
+
+
+@app.route('/stock')
+@login_required
+def stock():
+    """Mobile-first single-location stock and sales screen."""
+    return render_template('stock.html', user=session.get('user'))
+
+
+@app.route('/reports')
+@login_required
+def reports():
+    return render_template('reports.html', user=session.get('user'))
+
+
+def refresh_notifications(db):
+    """Generate de-duplicated low-stock and expiry alerts for the bell."""
+    central_id = central_shop_id(db)
+    items = db.execute('SELECT id, name, qty, low_stock_threshold FROM items WHERE shop_id = ?', (central_id,)).fetchall()
+    for item in items:
+        if float(item['low_stock_threshold'] or 0) > 0 and float(item['qty']) <= float(item['low_stock_threshold']):
+            message = f"{item['name']} is low: {float(item['qty']):.3f} kg remaining."
+            existing = db.execute('SELECT id FROM notifications WHERE item_id = ? AND kind = ? AND message = ?', (item['id'], 'low_stock', message)).fetchone()
+            if not existing:
+                db.execute('INSERT INTO notifications (item_id, kind, message) VALUES (?, ?, ?)', (item['id'], 'low_stock', message))
+    cutoff = (datetime.now() + timedelta(days=7)).date().isoformat()
+    receipts = db.execute('''SELECT r.id, r.item_id, r.batch_number, r.expiration_date, i.name
+                             FROM stock_receipts r JOIN items i ON i.id = r.item_id
+                             WHERE r.expiration_date IS NOT NULL AND r.expiration_date <= ?''', (cutoff,)).fetchall()
+    for receipt in receipts:
+        message = f"{receipt['name']} batch {receipt['batch_number'] or '—'} expires on {receipt['expiration_date']}."
+        existing = db.execute('SELECT id FROM notifications WHERE item_id = ? AND kind = ? AND message = ?', (receipt['item_id'], 'expiry', message)).fetchone()
+        if not existing:
+            db.execute('INSERT INTO notifications (item_id, kind, message) VALUES (?, ?, ?)', (receipt['item_id'], 'expiry', message))
+    db.commit()
+
+
+@app.route('/api/central/items', methods=['GET', 'POST'])
+@api_login_required
+def central_items():
+    db = get_db()
+    central_id = central_shop_id(db)
+    if request.method == 'GET':
+        rows = db.execute('''SELECT id, name, sku, qty, selling_price, cost_price, low_stock_threshold,
+                             ROUND(qty * selling_price, 2) AS stock_value
+                             FROM items WHERE shop_id = ? ORDER BY name''', (central_id,)).fetchall()
+        return jsonify([dict(row) for row in rows])
+    data = request.get_json() or {}
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({'error': 'Product name is required'}), 400
+    try:
+        qty = number(data.get('quantity_kg', 0), 'Quantity')
+        selling = number(data.get('selling_price', 0), 'Selling price')
+        cost = number(data.get('cost_price', 0), 'Cost price')
+        threshold = number(data.get('low_stock_threshold', 0), 'Low-stock threshold')
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    existing = db.execute('SELECT id FROM items WHERE shop_id = ? AND lower(name) = lower(?)', (central_id, name)).fetchone()
+    if existing:
+        return jsonify({'error': 'A product with this name already exists'}), 409
+    result = db.execute('''INSERT INTO items (name, shop_id, qty, sku, selling_price, cost_price, low_stock_threshold)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)''', (name, central_id, qty, data.get('sku', '').strip() or None, selling, cost, threshold))
+    if qty > 0:
+        db.execute('''INSERT INTO stock_receipts (item_id, quantity_kg, cost_price, selling_price, batch_number, expiration_date, user_id)
+                      VALUES (?, ?, ?, ?, ?, ?, ?)''', (result.lastrowid, qty, cost, selling, data.get('batch_number', '').strip() or None, data.get('expiration_date') or None, session.get('user_id')))
+    db.commit()
+    return jsonify({'id': result.lastrowid}), 201
+
+
+@app.route('/api/central/items/<int:item_id>/receive', methods=['POST'])
+@api_login_required
+def receive_stock(item_id):
+    data = request.get_json() or {}
+    try:
+        qty = number(data.get('quantity_kg'), 'Quantity', 0.001)
+        cost = number(data.get('cost_price', 0), 'Cost price')
+        selling = number(data.get('selling_price', 0), 'Selling price')
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    db = get_db()
+    item = db.execute('SELECT id FROM items WHERE id = ? AND shop_id = ?', (item_id, central_shop_id(db))).fetchone()
+    if not item:
+        return jsonify({'error': 'Product not found'}), 404
+    db.execute('UPDATE items SET qty = qty + ?, cost_price = ?, selling_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (qty, cost, selling, item_id))
+    db.execute('''INSERT INTO stock_receipts (item_id, quantity_kg, cost_price, selling_price, batch_number, expiration_date, user_id)
+                  VALUES (?, ?, ?, ?, ?, ?, ?)''', (item_id, qty, cost, selling, data.get('batch_number', '').strip() or None, data.get('expiration_date') or None, session.get('user_id')))
+    db.commit()
+    return jsonify({'success': True})
+
+
+@app.route('/api/central/items/<int:item_id>/sell', methods=['POST'])
+@api_login_required
+def sell_stock(item_id):
+    data = request.get_json() or {}
+    try:
+        qty = number(data.get('quantity_kg'), 'Quantity', 0.001)
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    db = get_db()
+    item = db.execute('SELECT id, name, qty, selling_price FROM items WHERE id = ? AND shop_id = ?', (item_id, central_shop_id(db))).fetchone()
+    if not item:
+        return jsonify({'error': 'Product not found'}), 404
+    if float(item['qty']) < qty:
+        return jsonify({'error': f"Only {float(item['qty']):.3f} kg is available"}), 400
+    # A sale may override the price, but an omitted/blank value always uses the
+    # product's current stock selling price per kilogram.
+    requested_price = data.get('price_per_kg')
+    price = number(item['selling_price'] if requested_price in (None, '') else requested_price, 'Price per kg')
+    total = round(qty * price, 2)
+    db.execute('UPDATE items SET qty = qty - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (qty, item_id))
+    db.execute('''INSERT INTO sales (item_id, quantity_kg, price_per_kg, total_amount, customer_name, user_id)
+                  VALUES (?, ?, ?, ?, ?, ?)''', (item_id, qty, price, total, data.get('customer_name', '').strip() or None, session.get('user_id')))
+    db.commit()
+    refresh_notifications(db)
+    return jsonify({'success': True, 'total_amount': total})
+
+
+@app.route('/api/dashboard', methods=['GET'])
+@api_login_required
+def dashboard():
+    db = get_db()
+    central_id = central_shop_id(db)
+    refresh_notifications(db)
+    stock = db.execute('SELECT COALESCE(SUM(qty * selling_price), 0) AS value, COALESCE(SUM(qty), 0) AS kg FROM items WHERE shop_id = ?', (central_id,)).fetchone()
+    today = db.execute("SELECT COALESCE(SUM(quantity_kg), 0) AS kg, COALESCE(SUM(total_amount), 0) AS revenue FROM sales WHERE DATE(created_at) = DATE(CURRENT_TIMESTAMP)").fetchone()
+    return jsonify({'stock_value': float(stock['value']), 'stock_kg': float(stock['kg']), 'today_kg': float(today['kg']), 'today_revenue': float(today['revenue'])})
+
+
+@app.route('/api/reports/movement', methods=['GET'])
+@api_login_required
+def movement_report():
+    """Value and kilogram movement report; deliberately excludes payment/invoice data."""
+    db = get_db()
+    start = request.args.get('start') or datetime.now().replace(day=1).date().isoformat()
+    end = request.args.get('end') or datetime.now().date().isoformat()
+    incoming = db.execute('''SELECT COALESCE(SUM(quantity_kg), 0) AS kg,
+                             COALESCE(SUM(quantity_kg * cost_price), 0) AS amount
+                             FROM stock_receipts WHERE DATE(created_at) BETWEEN DATE(?) AND DATE(?)''', (start, end)).fetchone()
+    outgoing = db.execute('''SELECT COALESCE(SUM(quantity_kg), 0) AS kg,
+                             COALESCE(SUM(total_amount), 0) AS amount
+                             FROM sales WHERE DATE(created_at) BETWEEN DATE(?) AND DATE(?)''', (start, end)).fetchone()
+    return jsonify({'start': start, 'end': end,
+                    'incoming_kg': float(incoming['kg']), 'incoming_amount': float(incoming['amount']),
+                    'outgoing_kg': float(outgoing['kg']), 'outgoing_amount': float(outgoing['amount'])})
+
+
+@app.route('/api/reports/activity', methods=['GET'])
+@api_login_required
+def activity_report():
+    """Detailed, date-filtered sales and stock-change history with responsible user."""
+    db = get_db()
+    start = request.args.get('start') or datetime.now().replace(day=1).date().isoformat()
+    end = request.args.get('end') or datetime.now().date().isoformat()
+    sales = db.execute('''SELECT s.id, s.created_at, i.name AS product_name, s.quantity_kg,
+                          s.price_per_kg, s.total_amount, s.customer_name,
+                          COALESCE(u.username, 'Deleted user') AS username
+                          FROM sales s JOIN items i ON i.id = s.item_id
+                          LEFT JOIN users u ON u.id = s.user_id
+                          WHERE DATE(s.created_at) BETWEEN DATE(?) AND DATE(?)
+                          ORDER BY s.created_at DESC''', (start, end)).fetchall()
+    receipts = db.execute('''SELECT r.id, r.created_at, i.name AS product_name, r.quantity_kg,
+                             r.cost_price, r.selling_price, r.batch_number, r.expiration_date,
+                             COALESCE(u.username, 'Deleted user') AS username
+                             FROM stock_receipts r JOIN items i ON i.id = r.item_id
+                             LEFT JOIN users u ON u.id = r.user_id
+                             WHERE DATE(r.created_at) BETWEEN DATE(?) AND DATE(?)
+                             ORDER BY r.created_at DESC''', (start, end)).fetchall()
+    return jsonify({'start': start, 'end': end,
+                    'sales': [dict(row) for row in sales],
+                    'stock_receipts': [dict(row) for row in receipts]})
+
+
+@app.route('/api/notifications', methods=['GET'])
+@api_login_required
+def list_notifications():
+    db = get_db()
+    refresh_notifications(db)
+    rows = db.execute('SELECT id, kind, message, is_read, created_at FROM notifications ORDER BY is_read, created_at DESC LIMIT 50').fetchall()
+    return jsonify([dict(row) for row in rows])
+
+
+@app.route('/api/notifications/<int:notification_id>/read', methods=['POST'])
+@api_login_required
+def read_notification(notification_id):
+    db = get_db()
+    db.execute('UPDATE notifications SET is_read = 1 WHERE id = ?', (notification_id,))
+    db.commit()
+    return jsonify({'success': True})
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -1179,13 +1423,13 @@ def export_database_to_json(db):
     """Export database to JSON format for portable backup."""
     backup_data = {
         'format': 'inventory_backup',
-        'format_version': 1,
+        'format_version': 2,
         'created_at': datetime.now().isoformat(),
         'tables': {}
     }
     
     # Export all tables
-    tables = ['users', 'shops', 'product_lists', 'list_items', 'items']
+    tables = ['users', 'shops', 'product_lists', 'list_items', 'items', 'stock_receipts', 'sales', 'notifications']
     for table in tables:
         try:
             cur = db.execute(f'SELECT * FROM {table}')
@@ -1214,9 +1458,9 @@ def create_backup_zip():
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         # Write metadata
         metadata = {
-            'backup_format_version': 1,
-            'application_version': '1.0.0',
-            'database_schema_version': 5,
+            'backup_format_version': 2,
+            'application_version': '2.0.0',
+            'database_schema_version': 6,
             'created': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         zf.writestr('BACKUP_INFO.json', json.dumps(metadata, indent=2))
@@ -1298,6 +1542,7 @@ def validate_backup_zip(zip_buffer):
 
 def restore_from_backup(zip_buffer):
     """Restore database from backup ZIP file."""
+    db = None
     try:
         # Validate backup first
         is_valid, message = validate_backup_zip(zip_buffer)
@@ -1312,24 +1557,20 @@ def restore_from_backup(zip_buffer):
         
         # Get list of tables to clear (includes users now)
         # Delete in order of foreign key dependencies
-        tables_to_clear = ['items', 'list_items', 'product_lists', 'shops', 'users']
+        tables_to_clear = ['notifications', 'sales', 'stock_receipts', 'items', 'list_items', 'product_lists', 'shops', 'users']
         
         # Clear existing data (but preserve backup_log)
         # Delete in order to avoid foreign key constraint violations
         for table in tables_to_clear:
             try:
                 db.execute(f'DELETE FROM {table}')
-                db.commit()  # Commit after each successful delete
+                # Keep the entire restore atomic; commit only after every table is restored.
             except Exception as e:
-                # Try to rollback if delete failed
-                try:
-                    db.rollback()
-                except:
-                    pass
-                # Continue with next table
+                raise RuntimeError(f'Could not clear {table}: {e}') from e
         
         # Restore all tables except backup_log
-        tables_to_restore = [t for t in db_data.get('tables', {}).keys() if t != 'backup_log']
+        allowed_tables = {'users', 'shops', 'product_lists', 'list_items', 'items', 'stock_receipts', 'sales', 'notifications'}
+        tables_to_restore = [t for t in db_data.get('tables', {}).keys() if t in allowed_tables]
         
         restore_errors = []  # Track errors for debugging
         
@@ -1353,32 +1594,18 @@ def restore_from_backup(zip_buffer):
                         f'INSERT INTO {table_name} ({",".join(columns)}) VALUES ({placeholders})',
                         values
                     )
-                    # Commit each successful insert
-                    db.commit()
                 except Exception as e:
-                    error_str = str(e)
-                    # Skip duplicate key errors for users table (expected for default admin)
-                    if table_name == 'users' and 'duplicate key' in error_str.lower():
-                        # Just rollback and continue - user already exists
-                        try:
-                            db.rollback()
-                        except:
-                            pass
-                    else:
-                        # Log errors for debugging
-                        error_msg = f'Table {table_name}, row {i}: {type(e).__name__}: {e}'
-                        restore_errors.append(error_msg)
-                        # Try to rollback failed insert
-                        try:
-                            db.rollback()
-                        except:
-                            pass
+                    error_msg = f'Table {table_name}, row {i}: {type(e).__name__}: {e}'
+                    restore_errors.append(error_msg)
+                    raise RuntimeError(error_msg) from e
         
-        # Final commit if needed
-        try:
+        db.commit()
+        # PostgreSQL sequences are not advanced by explicit IDs from a backup.
+        # Re-sync them so the next normal insert cannot collide with restored data.
+        if USE_POSTGRES:
+            for table_name in allowed_tables:
+                db.execute(f"SELECT setval(pg_get_serial_sequence('{table_name}', 'id'), COALESCE((SELECT MAX(id) FROM {table_name}), 1), true)")
             db.commit()
-        except:
-            pass
         
         # Print errors if any (for debugging)
         if restore_errors:
@@ -1389,6 +1616,11 @@ def restore_from_backup(zip_buffer):
         return True, 'Database restored successfully'
     
     except Exception as e:
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
         return False, f'Restoration failed: {str(e)}'
 
 
