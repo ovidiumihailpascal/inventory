@@ -487,6 +487,22 @@ def receive_stock(item_id):
     return jsonify({'success': True})
 
 
+@app.route('/api/central/items/<int:item_id>', methods=['DELETE'])
+@api_login_required
+def delete_central_item(item_id):
+    """Remove an accidentally created product, without erasing recorded sales."""
+    db = get_db()
+    item = db.execute('SELECT id FROM items WHERE id = ? AND shop_id = ?', (item_id, central_shop_id(db))).fetchone()
+    if not item:
+        return jsonify({'error': 'Product not found'}), 404
+    sale = db.execute('SELECT id FROM sales WHERE item_id = ? LIMIT 1', (item_id,)).fetchone()
+    if sale:
+        return jsonify({'error': 'This product has sales history and cannot be deleted.'}), 409
+    db.execute('DELETE FROM items WHERE id = ?', (item_id,))
+    db.commit()
+    return '', 204
+
+
 @app.route('/api/central/items/<int:item_id>/sell', methods=['POST'])
 @api_login_required
 def sell_stock(item_id):
