@@ -49,9 +49,19 @@ async function startScanner(target='sale'){
     scannerStatus.textContent='Starting camera…';
     modal('scannerModal').show();
     html5Scanner=new Html5Qrcode('barcodeReader');
-    await html5Scanner.start({facingMode:{ideal:'environment'}},{fps:10,qrbox:{width:250,height:160}},code=>barcodeScanned(code));
+    await html5Scanner.start({facingMode:'environment'},{fps:10,qrbox:{width:250,height:160}},code=>barcodeScanned(code));
     scannerStatus.textContent='Point the camera at the barcode.';
-  } catch(error) { scannerStatus.textContent='Camera could not be opened.'; alert('Camera access is required to scan. Check Chrome permission and open the app through HTTPS.'); stopScanner(); }
+  } catch(error) {
+    console.error('Barcode camera error:', error);
+    stopScanner();
+    let message='Camera could not be opened.';
+    if(!window.isSecureContext) message='Camera requires an HTTPS connection.';
+    else if(error && error.name==='NotAllowedError') message='Camera permission is blocked. Allow Camera for this site in Chrome settings, then reload.';
+    else if(error && error.name==='NotFoundError') message='No camera was found on this device.';
+    else if(error && error.name==='NotReadableError') message='The camera is already being used by another app.';
+    else if(error && error.name) message=`Camera could not be opened: ${error.name}.`;
+    scannerStatus.textContent=message; alert(message);
+  }
 }
 function barcodeScanned(code){
   if(scannerTarget==='product'){
